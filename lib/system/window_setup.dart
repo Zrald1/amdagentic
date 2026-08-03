@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:window_manager/window_manager.dart';
 
 /// Handles desktop-only window configuration: transparent, always-on-top,
-/// borderless, click-through overlay. On mobile this is a no-op.
+/// borderless overlay. On mobile this is a no-op.
 class WindowSetup {
   WindowSetup._();
 
@@ -16,27 +16,37 @@ class WindowSetup {
 
     await windowManager.ensureInitialized();
 
+    // Get actual screen size
+    final size = await windowManager.getSize();
+    _cachedScreenSize = size;
+
     await windowManager.waitUntilReadyToShow(
       WindowOptions(
-        size: const Size(400, 200),
-        backgroundColor: Colors.transparent,
+        // Wide window spanning the bottom of the screen.
+        size: const Size(1920, 200),
+        // Use a near-transparent black so the window is actually visible
+        // on Windows. Full Colors.transparent can make the whole window
+        // disappear on Windows layered windows.
+        backgroundColor: const Color(0x01000000),
         skipTaskbar: true,
         titleBarStyle: TitleBarStyle.hidden,
         alwaysOnTop: true,
       ),
       () async {
-        await windowManager.setPosition(const Offset(50, 50));
+        // Position at the bottom-left of a 1080p screen initially.
+        // The mascot logic will reposition as it walks.
+        await windowManager.setSize(const Size(1920, 200));
+        await windowManager.setPosition(const Offset(0, 880));
         await windowManager.show();
-        // Make the whole window click-through by default. The mascot widget
-        // re-enables mouse events on its own bounding box when hovered.
-        await windowManager.setIgnoreMouseEvents(true);
+        await windowManager.focus();
+        // Don't set click-through initially — let the user see and click it.
       },
     );
 
     _cachedScreenSize = const Size(1920, 1080);
   }
 
-  /// Toggle click-through. When true, mouse events pass through the window.
+  /// Toggle click-through.
   static Future<void> setClickThrough(bool ignore) async {
     if (!Platform.isWindows && !Platform.isLinux && !Platform.isMacOS) return;
     await windowManager.setIgnoreMouseEvents(ignore);
@@ -47,10 +57,8 @@ class WindowSetup {
   static Future<void> positionMascot(
       double logicalX, double screenWidth, double mascotHeight) async {
     if (!Platform.isWindows && !Platform.isLinux && !Platform.isMacOS) return;
-    final screenH = _cachedScreenSize?.height ?? 1080.0;
-    final maxX = (screenWidth - mascotHeight).clamp(1.0, double.infinity);
-    final x = logicalX.clamp(0.0, maxX);
-    final y = screenH - mascotHeight - 48;
-    await windowManager.setPosition(Offset(x, y));
+    // Window spans the full screen width at the bottom; we don't need to
+    // move it — the mascot moves within the window via Positioned.
+    // Just ensure the window is at the bottom of the screen.
   }
 }

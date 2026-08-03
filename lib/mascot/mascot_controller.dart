@@ -191,5 +191,5 @@ class MascotController extends StateNotifier<MascotStatus> {
 
 final mascotControllerProvider =
     StateNotifierProvider<MascotController, MascotStatus>(
-  (ref) => MascotController(1920.0), // default; updated at runtime
+  (ref) => MascotController(1800.0), // leaves room for mascot width
 );

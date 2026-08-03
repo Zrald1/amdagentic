@@ -1,0 +1,130 @@
+#pragma once
+#include <d2d1.h>
+#include <wrl/client.h>
+#include <string>
+
+using Microsoft::WRL::ComPtr;
+
+enum class RobotState {
+    Idle,
+    Walking,
+    Greeting,
+    Working,
+    Celebrating,
+    Sleeping
+};
+
+enum class ClickRegion {
+    None,
+    Head,   // face screen → input dialog
+    Arms,   // side arms → wave
+    Bottom  // lower body → walk (EVE hovers, no legs)
+};
+
+// Eye expressions — gives EVE some personality beyond a static stare.
+enum class EyeExpression {
+    Neutral,
+    Happy,
+    Curious,
+    Surprised,
+    Suspicious,
+    Wink
+};
+
+class RobotRenderer {
+public:
+    RobotRenderer();
+    ~RobotRenderer();
+
+    bool Initialize(HWND hwnd);
+    void Render();
+    void Update();
+    void OnResize(int width, int height);
+
+    // Mouse handling — unified press/drag/click
+    void OnMouseDown(int mouseX, int mouseY);
+    void OnMouseMove(int mouseX, int mouseY);
+    void OnMouseUp(int mouseX, int mouseY);
+
+    bool IsDragging() const { return m_dragging; }
+    bool WantsInputDialog() const { return m_wantsInputDialog; }
+    void ClearInputDialogFlag() { m_wantsInputDialog = false; }
+
+    float GetRobotScreenX() const { return m_screenX; }
+    float GetRobotScreenY() const { return m_screenY; }
+
+private:
+    HWND m_hwnd = nullptr;
+    ComPtr<ID2D1Factory> m_factory;
+    ComPtr<ID2D1HwndRenderTarget> m_target;
+
+    // Brushes — EVE palette: glossy white, black, neon blue, green plant
+    ComPtr<ID2D1SolidColorBrush> m_brushWhite;        // body
+    ComPtr<ID2D1SolidColorBrush> m_brushWhiteLight;   // highlight
+    ComPtr<ID2D1SolidColorBrush> m_brushWhiteShade;   // soft shadow
+    ComPtr<ID2D1SolidColorBrush> m_brushWhiteMid;     // mid gradient
+    ComPtr<ID2D1SolidColorBrush> m_brushBlack;        // face screen
+    ComPtr<ID2D1SolidColorBrush> m_brushNeon;        // blue LED eyes
+    ComPtr<ID2D1SolidColorBrush> m_brushNeonBright;  // brighter blue
+    ComPtr<ID2D1SolidColorBrush> m_brushNeonDim;     // dimmer blue
+    ComPtr<ID2D1SolidColorBrush> m_brushPlant;        // green plant symbol
+    ComPtr<ID2D1SolidColorBrush> m_brushShadow;      // ground shadow
+    ComPtr<ID2D1SolidColorBrush> m_brushGlow;        // hover glow
+
+    // Animation
+    float m_animTime = 0.0f;
+    RobotState m_state = RobotState::Idle;
+    float m_stateTimer = 0.0f;
+    float m_nextBehaviorTime = 3.0f;
+    bool m_facingRight = true;
+
+    // Eye expression (personality)
+    EyeExpression m_eyeExpression = EyeExpression::Neutral;
+    float m_eyeExprTimer = 6.0f;
+
+    // Screen position
+    float m_screenX = 50.0f;
+    float m_screenY = 0.0f;  // 0 = bottom; positive = higher
+    float m_targetX = 50.0f;
+    float m_hoverSpeed = 100.0f;
+    bool m_userWalking = false;
+
+    // Drag state
+    bool m_mouseDown = false;
+    bool m_dragging = false;
+    int m_downX = 0, m_downY = 0;       // mouse pos at press
+    float m_dragStartX = 0, m_dragStartY = 0; // robot pos at press
+    float m_holdTimer = 0.0f;
+
+    // Input dialog
+    bool m_wantsInputDialog = false;
+
+    // Typing detection
+    float m_typingCooldown = 0.0f;
+    float m_keyboardCheckTimer = 0.0f;
+    bool m_lastKeyState[256] = {};
+    HWND m_lastForegroundWnd = nullptr;
+
+    // Methods
+    void PickNextBehavior();
+    void SetState(RobotState state, float duration);
+    void MoveWindowToRobot();
+    void WalkToEdge(bool left);
+    void CheckKeyboardActivity();
+    float GetScreenLeftEdge();
+    float GetScreenRightEdge();
+    ClickRegion HitTest(int mouseX, int mouseY);
+    float ComputeWalkLeanDeg() const;
+
+    // EVE drawing
+    void DrawEggBody(float cx, float cy, float bob);
+    void DrawHead(float cx, float headY, EyeExpression expr, bool sleeping, float turnOffsetX = 0.0f);
+    void DrawSingleEye(float ex, float ey, float halfW, float halfH, float rotationDeg);
+    void DrawHoverGlow(float cx, float baseY);
+    void DrawArm(float cx, float cy, float bob, bool left, bool waving, float waveAngle,
+                 float leanDeg = 0.0f, float dislocate = 0.0f, float squashX = 1.0f);
+    void DrawGroundShadow(float cx, float baseY, float w);
+    void DrawPlantSymbol(float cx, float cy);
+    void DrawGear(float cx, float cy, float r);
+    void DrawRobot();
+};

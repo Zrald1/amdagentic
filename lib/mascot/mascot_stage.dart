@@ -48,13 +48,11 @@ class _MascotStageState extends ConsumerState<MascotStage>
     final status = ref.watch(mascotControllerProvider);
 
     return Scaffold(
-      backgroundColor: Colors.transparent,
+      backgroundColor: const Color(0xFF1E1E2E),
       body: Stack(
         children: [
-          // Mascot at the bottom of the window
-          Positioned(
-            left: 0,
-            bottom: 0,
+          // Mascot centered in the window
+          Center(
             child: GestureDetector(
               onTap: _onTap,
               child: SizedBox(

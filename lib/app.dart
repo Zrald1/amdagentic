@@ -44,7 +44,7 @@ class _AriaHomeState extends ConsumerState<AriaHome> {
   @override
   Widget build(BuildContext context) {
     return const Scaffold(
-      backgroundColor: Colors.transparent,
+      backgroundColor: Color(0xFF1E1E2E),
       body: MascotStage(),
     );
   }

@@ -1,17 +1,17 @@
-name: Build Windows EXE
+name: Build Windows EXE (CI)
 
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - '.github/workflows/release.yml'
   pull_request:
     branches: [main]
-  workflow_dispatch:
 
 jobs:
   build-windows:
     runs-on: windows-latest
     timeout-minutes: 45
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -31,18 +31,8 @@ jobs:
       - name: Analyze
         run: flutter analyze --no-fatal-infos --no-fatal-warnings
 
-      - name: Build Windows (debug)
-        run: flutter build windows --debug
-
       - name: Build Windows (release)
         run: flutter build windows --release
-
-      - name: Upload debug build
-        uses: actions/upload-artifact@v4
-        with:
-          name: aria-windows-debug
-          path: build/windows/x64/runner/Debug/
-          retention-days: 30
 
       - name: Upload release build
         uses: actions/upload-artifact@v4

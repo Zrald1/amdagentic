@@ -2,14 +2,16 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../config/app_config.dart';
+import '../ui/prompt_overlay.dart';
 import 'mascot_controller.dart';
 import 'robot_painter.dart';
 
 /// The main mascot rendering widget. Listens to [MascotController] for state
 /// changes and drives a continuous animation loop for the painter.
 ///
-/// The window spans the full screen width at the bottom. The mascot moves
-/// within that window via [Positioned].
+/// The desktop window is small (just big enough for the mascot) and gets
+/// repositioned as the mascot walks. This keeps the transparent overlay
+/// reliable on Windows.
 class MascotStage extends ConsumerStatefulWidget {
   const MascotStage({super.key});
 
@@ -44,21 +46,15 @@ class _MascotStageState extends ConsumerState<MascotStage>
   @override
   Widget build(BuildContext context) {
     final status = ref.watch(mascotControllerProvider);
-    final screenW = MediaQuery.of(context).size.width;
 
-    // Update the controller's screen width.
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      // No-op; controller uses a default 1920 which is fine.
-    });
-
-    return Stack(
-      children: [
-        Positioned(
-          left: status.x.clamp(0.0, (screenW - AppConfig.mascotSize).clamp(1.0, double.infinity)),
-          bottom: AppConfig.mascotBottomPadding,
-          child: MouseRegion(
-            onEnter: (_) {},
-            onExit: (_) {},
+    return Scaffold(
+      backgroundColor: Colors.transparent,
+      body: Stack(
+        children: [
+          // Mascot at the bottom of the window
+          Positioned(
+            left: 0,
+            bottom: 0,
             child: GestureDetector(
               onTap: _onTap,
               child: SizedBox(
@@ -81,8 +77,10 @@ class _MascotStageState extends ConsumerState<MascotStage>
               ),
             ),
           ),
-        ),
-      ],
+          // Prompt overlay appears above the mascot
+          const PromptOverlay(),
+        ],
+      ),
     );
   }
 }

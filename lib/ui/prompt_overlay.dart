@@ -5,10 +5,13 @@ import '../agent/agent_service.dart';
 import '../mascot/mascot_controller.dart';
 import '../mascot/mascot_stage.dart';
 import '../mascot/mascot_state.dart';
-import 'engine_panel.dart';
 
 /// Overlay that shows the prompt panel when the mascot is clicked, plus the
 /// thought bubble during work, and the result panel when done.
+///
+/// Since the desktop window is small (just the mascot), this panel renders
+/// as an overlay above the mascot within that same window. On desktop the
+/// window will need to expand to fit the panel.
 class PromptOverlay extends ConsumerStatefulWidget {
   const PromptOverlay({super.key});
 
@@ -18,16 +21,13 @@ class PromptOverlay extends ConsumerStatefulWidget {
 
 class _PromptOverlayState extends ConsumerState<PromptOverlay> {
   final _controller = TextEditingController();
-  final _scrollController = ScrollController();
   String _resultText = '';
   String _errorText = '';
   bool _isWorking = false;
-  bool _showEngine = false;
 
   @override
   void dispose() {
     _controller.dispose();
-    _scrollController.dispose();
     super.dispose();
   }
 
@@ -69,21 +69,22 @@ class _PromptOverlayState extends ConsumerState<PromptOverlay> {
     final visible = ref.watch(promptVisibleProvider);
     final mascotStatus = ref.watch(mascotControllerProvider);
 
-    if (!visible && mascotStatus.state != MascotState.working &&
+    if (!visible &&
+        mascotStatus.state != MascotState.working &&
         mascotStatus.state != MascotState.celebrating) {
       return const SizedBox.shrink();
     }
 
     return Positioned(
       left: 0,
-      bottom: 0,
+      top: 0,
       child: Material(
         color: Colors.transparent,
         child: Container(
-          width: 380,
-          margin: const EdgeInsets.fromLTRB(16, 0, 16, 140),
+          width: 320,
+          margin: const EdgeInsets.all(8),
           decoration: BoxDecoration(
-            color: const Color(0xFF1E1E2E).withValues(alpha: 0.95),
+            color: const Color(0xFF1E1E2E).withValues(alpha: 0.97),
             borderRadius: BorderRadius.circular(20),
             border: Border.all(
               color: const Color(0xFF6C5CE7).withValues(alpha: 0.5),
@@ -125,32 +126,20 @@ class _PromptOverlayState extends ConsumerState<PromptOverlay> {
                     ),
                     const Spacer(),
                     IconButton(
-                      icon: const Icon(Icons.memory, color: Color(0xFFA29BFE), size: 18),
-                      onPressed: () => setState(() => _showEngine = !_showEngine),
-                      tooltip: 'Engine info',
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.close, color: Colors.white54, size: 18),
+                      icon: const Icon(Icons.close,
+                          color: Colors.white54, size: 18),
                       onPressed: _close,
                     ),
                   ],
                 ),
               ),
 
-              if (_showEngine) ...[
-                const Padding(
-                  padding: EdgeInsets.symmetric(horizontal: 12),
-                  child: EnginePanel(),
-                ),
-                const SizedBox(height: 8),
-              ],
-
               // Thought / result display
               if (mascotStatus.state == MascotState.working ||
                   _resultText.isNotEmpty ||
                   _errorText.isNotEmpty)
                 ConstrainedBox(
-                  constraints: const BoxConstraints(maxHeight: 200),
+                  constraints: const BoxConstraints(maxHeight: 150),
                   child: Container(
                     margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
                     padding: const EdgeInsets.all(12),
@@ -159,7 +148,6 @@ class _PromptOverlayState extends ConsumerState<PromptOverlay> {
                       borderRadius: BorderRadius.circular(12),
                     ),
                     child: SingleChildScrollView(
-                      controller: _scrollController,
                       child: _buildContent(mascotStatus),
                     ),
                   ),
@@ -177,7 +165,8 @@ class _PromptOverlayState extends ConsumerState<PromptOverlay> {
                           style: const TextStyle(color: Colors.white, fontSize: 14),
                           decoration: InputDecoration(
                             hintText: 'Ask Aria to do something...',
-                            hintStyle: TextStyle(color: Colors.white.withValues(alpha: 0.3)),
+                            hintStyle: TextStyle(
+                                color: Colors.white.withValues(alpha: 0.3)),
                             filled: true,
                             fillColor: Colors.white.withValues(alpha: 0.08),
                             border: OutlineInputBorder(

@@ -134,8 +134,9 @@ bool Win32Window::Create(const std::wstring& title,
   UINT dpi = FlutterDesktopGetDpiForMonitor(monitor);
   double scale_factor = dpi / 96.0;
 
-  HWND window = CreateWindow(
-      window_class, title.c_str(), WS_OVERLAPPEDWINDOW,
+  HWND window = CreateWindowEx(
+      WS_EX_APPWINDOW | WS_EX_LAYERED,
+      window_class, title.c_str(), WS_POPUP,
       Scale(origin.x, scale_factor), Scale(origin.y, scale_factor),
       Scale(size.width, scale_factor), Scale(size.height, scale_factor),
       nullptr, nullptr, GetModuleHandle(nullptr), this);
@@ -143,6 +144,12 @@ bool Win32Window::Create(const std::wstring& title,
   if (!window) {
     return false;
   }
+
+  // Enable transparency: use LWA_COLORKEY with a magenta key so that
+  // magenta pixels become click-through transparent, while everything else
+  // is visible and clickable. Flutter renders transparent areas as black,
+  // so we use LWA_ALPHA for per-pixel alpha instead.
+  SetLayeredWindowAttributes(window, 0, 255, LWA_ALPHA);
 
   UpdateTheme(window);
 

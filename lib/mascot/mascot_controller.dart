@@ -13,17 +13,13 @@ import 'mascot_state.dart';
 ///   idle --(very long)--> sleeping --> (mouse activity) --> idle
 ///   click --> greeting --> (prompt submitted) --> working --> celebrating --> idle
 class MascotController extends StateNotifier<MascotStatus> {
-  MascotController(this._screenWidth) : super(MascotStatus(x: 100.0));
+  MascotController() : super(MascotStatus(x: 100.0));
 
-  final double _screenWidth;
   final Random _rng = Random();
   Timer? _behaviorTimer;
   Timer? _walkTimer;
   Timer? _greetTimer;
   Timer? _sleepTimer;
-  double _targetX = 100.0;
-
-  static const _mascotW = AppConfig.mascotSize;
 
   void start() {
     _scheduleNextBehavior();
@@ -140,41 +136,18 @@ class MascotController extends StateNotifier<MascotStatus> {
   }
 
   void _startWalking() {
-    _targetX = _rng.nextDouble() * (_screenWidth - _mascotW);
-    final currentX = state.x;
-    final distance = (_targetX - currentX).abs();
-    final durationMs = (distance / AppConfig.walkSpeed * 1000).round();
-
+    // The mascot walks in place (facing alternates) since the window is
+    // fixed-size. The walking animation is visual (legs moving) without
+    // changing X position. This keeps the transparent overlay reliable.
     state = state.copyWith(
       state: MascotState.walking,
-      facingRight: _targetX > currentX,
+      facingRight: _rng.nextBool(),
     );
 
     _walkTimer?.cancel();
-    _walkTimer = Timer(Duration(milliseconds: durationMs), () {
-      state = state.copyWith(state: MascotState.idle, x: _targetX);
+    _walkTimer = Timer(const Duration(seconds: 3), () {
+      state = state.copyWith(state: MascotState.idle);
       _scheduleNextBehavior();
-    });
-
-    // Animate X position smoothly.
-    _animateWalk(currentX, _targetX, durationMs);
-  }
-
-  void _animateWalk(double fromX, double toX, int durationMs) {
-    final steps = (durationMs / 16).ceil().clamp(1, 200);
-    final stepDelay = Duration(milliseconds: (durationMs / steps).round());
-    var step = 0;
-    _walkTimer?.cancel();
-    Timer.periodic(stepDelay, (t) {
-      step++;
-      if (step >= steps || state.state != MascotState.walking) {
-        state = state.copyWith(x: toX);
-        t.cancel();
-        return;
-      }
-      final progress = step / steps;
-      final x = fromX + (toX - fromX) * progress;
-      state = state.copyWith(x: x);
     });
   }
 
@@ -191,5 +164,5 @@ class MascotController extends StateNotifier<MascotStatus> {
 
 final mascotControllerProvider =
     StateNotifierProvider<MascotController, MascotStatus>(
-  (ref) => MascotController(1800.0), // leaves room for mascot width
+  (ref) => MascotController(),
 );

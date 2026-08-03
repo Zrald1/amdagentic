@@ -1,0 +1,44 @@
+name: aria_companion
+description: "Aria — an agentic AI desktop companion powered by AMD Radeon GPUs."
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.12.2
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+
+  # Window management (transparent, always-on-top overlay on desktop)
+  window_manager: ^0.4.3
+
+  # System tray + notifications (desktop)
+  tray_manager: ^0.5.0
+  local_notifier: ^0.1.6
+
+  # Character animation (2.5D Rive mascot with state machine)
+  rive: ^0.13.20
+
+  # Networking (OpenAI-compatible API to the GPU server)
+  http: ^1.2.2
+
+  # State management
+  flutter_riverpod: ^2.5.1
+
+  # Misc
+  path_provider: ^2.1.4
+  shared_preferences: ^2.3.2
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+flutter:
+  uses-material-design: true
+
+  assets:
+    - assets/rive/
+    - assets/icons/

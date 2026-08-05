@@ -20,6 +20,16 @@ static const D2D1::ColorF C_NEON_DIM    (0xFF006E8C);
 static const D2D1::ColorF C_PLANT       (0xFF00FF66);
 static const D2D1::ColorF C_SHADOW      (0xFFEFEFEF);
 static const D2D1::ColorF C_GLOW        (0xFFCFF0FF);
+static const D2D1::ColorF C_CAPE        (0xFFE00000); // pure red cape
+static const D2D1::ColorF C_CAPE_SHADE  (0xFF990000); // dark red for shading
+static const D2D1::ColorF C_CREST       (0xFFFFC125); // Spartan crest gold
+static const D2D1::ColorF C_GOLD        (0xFFDAA520); // golden armor body
+static const D2D1::ColorF C_GOLD_LIGHT  (0xFFFFE4B5); // light gold highlight
+static const D2D1::ColorF C_GOLD_DARK   (0xFF8B6914); // dark gold shade
+static const D2D1::ColorF C_GOLD_MID    (0xFFC49A34); // mid gold
+static const D2D1::ColorF C_GREEN       (0xFF39FF14); // bright neon green eyes
+static const D2D1::ColorF C_GREEN_LIGHT (0xFF7FFF00); // yellow-green eye core
+static const D2D1::ColorF C_ELECTRIC    (0xFF00FFFF); // cyan electric arc
 
 static float GetIdleDuration() {
     return 25.0f + (float)(rand() % 10);
@@ -29,11 +39,11 @@ static inline float Clamp01(float v) { return v < 0.0f ? 0.0f : (v > 1.0f ? 1.0f
 static inline float EaseOutQuad(float t) { return 1.0f - (1.0f - t) * (1.0f - t); }
 static inline float SmoothStep(float t) { return t * t * (3.0f - 2.0f * t); }
 
-// Builds EVE's teardrop body path: wide rounded top, tapering to a smooth
-// rounded point at the bottom.
-static void FillEveBodyPath(ID2D1Factory* factory, ID2D1RenderTarget* target,
-                             float cx, float centerY, float scale,
-                             float offsetX, float offsetY, ID2D1Brush* brush) {
+// Builds a heater-shield body path: flat-ish top, curving sides, pointed bottom.
+// Shield dimensions: ~64 wide (-32..32), ~98 tall (-44..54).
+static void FillShieldBodyPath(ID2D1Factory* factory, ID2D1RenderTarget* target,
+                                float cx, float centerY, float scale,
+                                float offsetX, float offsetY, ID2D1Brush* brush) {
     ComPtr<ID2D1PathGeometry> geo;
     factory->CreatePathGeometry(geo.GetAddressOf());
     ComPtr<ID2D1GeometrySink> sink;
@@ -43,21 +53,28 @@ static void FillEveBodyPath(ID2D1Factory* factory, ID2D1RenderTarget* target,
         return D2D1::Point2F(cx + offsetX + x * scale, centerY + offsetY + y * scale);
     };
 
-    sink->BeginFigure(pt(0, -44), D2D1_FIGURE_BEGIN_FILLED);
-    sink->AddBezier(D2D1::BezierSegment(pt(20, -44), pt(32, -34), pt(32, -16)));
-    sink->AddBezier(D2D1::BezierSegment(pt(32, 10), pt(20, 45), pt(0, 54)));
-    sink->AddBezier(D2D1::BezierSegment(pt(-20, 45), pt(-32, 10), pt(-32, -16)));
-    sink->AddBezier(D2D1::BezierSegment(pt(-32, -34), pt(-20, -44), pt(0, -44)));
+    // Shield outline: flat top with slight dip, curving sides to a point
+    sink->BeginFigure(pt(-32, -44), D2D1_FIGURE_BEGIN_FILLED);
+    // Top edge — slight curve down in middle for character
+    sink->AddBezier(D2D1::BezierSegment(pt(-10, -41), pt(10, -41), pt(32, -44)));
+    // Right side curving down and inward
+    sink->AddBezier(D2D1::BezierSegment(pt(34, -20), pt(30, 10), pt(20, 30)));
+    // Bottom right to point
+    sink->AddBezier(D2D1::BezierSegment(pt(12, 42), pt(4, 52), pt(0, 54)));
+    // Bottom left from point
+    sink->AddBezier(D2D1::BezierSegment(pt(-4, 52), pt(-12, 42), pt(-20, 30)));
+    // Left side curving back up
+    sink->AddBezier(D2D1::BezierSegment(pt(-30, 10), pt(-34, -20), pt(-32, -44)));
     sink->EndFigure(D2D1_FIGURE_END_CLOSED);
     sink->Close();
 
     target->FillGeometry(geo.Get(), brush);
 }
 
-// Stroke version — draws an outline around the body path
-static void StrokeEveBodyPath(ID2D1Factory* factory, ID2D1RenderTarget* target,
-                               float cx, float centerY, float scale,
-                               float offsetX, float offsetY, ID2D1Brush* brush, float strokeWidth) {
+// Stroke version — draws an outline around the shield body path
+static void StrokeShieldBodyPath(ID2D1Factory* factory, ID2D1RenderTarget* target,
+                                  float cx, float centerY, float scale,
+                                  float offsetX, float offsetY, ID2D1Brush* brush, float strokeWidth) {
     ComPtr<ID2D1PathGeometry> geo;
     factory->CreatePathGeometry(geo.GetAddressOf());
     ComPtr<ID2D1GeometrySink> sink;
@@ -67,11 +84,75 @@ static void StrokeEveBodyPath(ID2D1Factory* factory, ID2D1RenderTarget* target,
         return D2D1::Point2F(cx + offsetX + x * scale, centerY + offsetY + y * scale);
     };
 
-    sink->BeginFigure(pt(0, -44), D2D1_FIGURE_BEGIN_FILLED);
-    sink->AddBezier(D2D1::BezierSegment(pt(20, -44), pt(32, -34), pt(32, -16)));
-    sink->AddBezier(D2D1::BezierSegment(pt(32, 10), pt(20, 45), pt(0, 54)));
-    sink->AddBezier(D2D1::BezierSegment(pt(-20, 45), pt(-32, 10), pt(-32, -16)));
-    sink->AddBezier(D2D1::BezierSegment(pt(-32, -34), pt(-20, -44), pt(0, -44)));
+    sink->BeginFigure(pt(-32, -44), D2D1_FIGURE_BEGIN_FILLED);
+    sink->AddBezier(D2D1::BezierSegment(pt(-10, -41), pt(10, -41), pt(32, -44)));
+    sink->AddBezier(D2D1::BezierSegment(pt(34, -20), pt(30, 10), pt(20, 30)));
+    sink->AddBezier(D2D1::BezierSegment(pt(12, 42), pt(4, 52), pt(0, 54)));
+    sink->AddBezier(D2D1::BezierSegment(pt(-4, 52), pt(-12, 42), pt(-20, 30)));
+    sink->AddBezier(D2D1::BezierSegment(pt(-30, 10), pt(-34, -20), pt(-32, -44)));
+    sink->EndFigure(D2D1_FIGURE_END_CLOSED);
+    sink->Close();
+
+    target->DrawGeometry(geo.Get(), brush, strokeWidth);
+}
+
+// Spartan / Corinthian helmet path: domed crown, wide cheek guards,
+// pointed nose guard, and a tapered chin. Dimensions ~56 wide, ~50 tall.
+static void FillHelmetPath(ID2D1Factory* factory, ID2D1RenderTarget* target,
+                           float cx, float headY, float scale,
+                           float offsetX, float offsetY, ID2D1Brush* brush) {
+    ComPtr<ID2D1PathGeometry> geo;
+    factory->CreatePathGeometry(geo.GetAddressOf());
+    ComPtr<ID2D1GeometrySink> sink;
+    geo->Open(sink.GetAddressOf());
+
+    auto pt = [&](float x, float y) {
+        return D2D1::Point2F(cx + offsetX + x * scale, headY + offsetY + y * scale);
+    };
+
+    // Corinthian helmet outline
+    sink->BeginFigure(pt(-28, 8), D2D1_FIGURE_BEGIN_FILLED);
+    // Left cheek guard curve
+    sink->AddBezier(D2D1::BezierSegment(pt(-30, -5), pt(-26, -15), pt(-20, -22)));
+    // Left dome up to crown
+    sink->AddBezier(D2D1::BezierSegment(pt(-12, -28), pt(-6, -30), pt(0, -30)));
+    // Right dome down
+    sink->AddBezier(D2D1::BezierSegment(pt(6, -30), pt(12, -28), pt(20, -22)));
+    // Right cheek guard curve
+    sink->AddBezier(D2D1::BezierSegment(pt(26, -15), pt(30, -5), pt(28, 8)));
+    // Right side down to chin
+    sink->AddLine(pt(24, 18));
+    // Chin taper with slight point
+    sink->AddBezier(D2D1::BezierSegment(pt(18, 24), pt(-18, 24), pt(-24, 18)));
+    // Left side back up
+    sink->AddLine(pt(-28, 8));
+    sink->EndFigure(D2D1_FIGURE_END_CLOSED);
+    sink->Close();
+
+    target->FillGeometry(geo.Get(), brush);
+}
+
+// Stroke version of Spartan helmet path
+static void StrokeHelmetPath(ID2D1Factory* factory, ID2D1RenderTarget* target,
+                             float cx, float headY, float scale,
+                             float offsetX, float offsetY, ID2D1Brush* brush, float strokeWidth) {
+    ComPtr<ID2D1PathGeometry> geo;
+    factory->CreatePathGeometry(geo.GetAddressOf());
+    ComPtr<ID2D1GeometrySink> sink;
+    geo->Open(sink.GetAddressOf());
+
+    auto pt = [&](float x, float y) {
+        return D2D1::Point2F(cx + offsetX + x * scale, headY + offsetY + y * scale);
+    };
+
+    sink->BeginFigure(pt(-28, 8), D2D1_FIGURE_BEGIN_FILLED);
+    sink->AddBezier(D2D1::BezierSegment(pt(-30, -5), pt(-26, -15), pt(-20, -22)));
+    sink->AddBezier(D2D1::BezierSegment(pt(-12, -28), pt(-6, -30), pt(0, -30)));
+    sink->AddBezier(D2D1::BezierSegment(pt(6, -30), pt(12, -28), pt(20, -22)));
+    sink->AddBezier(D2D1::BezierSegment(pt(26, -15), pt(30, -5), pt(28, 8)));
+    sink->AddLine(pt(24, 18));
+    sink->AddBezier(D2D1::BezierSegment(pt(18, 24), pt(-18, 24), pt(-24, 18)));
+    sink->AddLine(pt(-28, 8));
     sink->EndFigure(D2D1_FIGURE_END_CLOSED);
     sink->Close();
 
@@ -120,6 +201,19 @@ bool RobotRenderer::Initialize(HWND hwnd) {
     m_target->CreateSolidColorBrush(C_GLOW,        m_brushGlow.GetAddressOf());
     m_target->CreateSolidColorBrush(C_WHITE_LIGHT, m_brushSpark.GetAddressOf());
     m_target->CreateSolidColorBrush(D2D1::ColorF(0xFF222222), m_brushOutline.GetAddressOf());
+    m_target->CreateSolidColorBrush(C_CAPE,        m_brushCape.GetAddressOf());
+    m_target->CreateSolidColorBrush(C_CAPE_SHADE,  m_brushCapeShade.GetAddressOf());
+    m_target->CreateSolidColorBrush(C_CREST,       m_brushCrest.GetAddressOf());
+    m_target->CreateSolidColorBrush(C_ELECTRIC,    m_brushElectric.GetAddressOf());
+    m_target->CreateSolidColorBrush(C_GREEN,       m_brushGreen.GetAddressOf());
+    m_target->CreateSolidColorBrush(C_GREEN_LIGHT, m_brushGreenBright.GetAddressOf());
+    m_target->CreateSolidColorBrush(C_GOLD,        m_brushGold.GetAddressOf());
+    m_target->CreateSolidColorBrush(C_GOLD_LIGHT,  m_brushGoldLight.GetAddressOf());
+    m_target->CreateSolidColorBrush(C_GOLD_DARK,   m_brushGoldDark.GetAddressOf());
+    m_target->CreateSolidColorBrush(C_GOLD_MID,    m_brushGoldMid.GetAddressOf());
+
+    // Initialize to gold armor color scheme immediately
+    UpdateColorScheme();
 
     return true;
 }
@@ -466,138 +560,170 @@ void RobotRenderer::SampleBackgroundBrightness() {
 }
 
 void RobotRenderer::UpdateColorScheme() {
-    if (m_darkMode) {
-        // Dark body palette for bright backgrounds
-        m_brushWhite->SetColor(D2D1::ColorF(0xFF1A1A1A));
-        m_brushWhiteLight->SetColor(D2D1::ColorF(0xFF333333));
-        m_brushWhiteShade->SetColor(D2D1::ColorF(0xFF0A0A0A));
-        m_brushWhiteMid->SetColor(D2D1::ColorF(0xFF1E1E1E));
-        m_brushShadow->SetColor(D2D1::ColorF(0x44000000));
-        m_brushGlow->SetColor(D2D1::ColorF(0xFFCFF0FF));
-    } else {
-        // Original white body palette
-        m_brushWhite->SetColor(C_WHITE);
-        m_brushWhiteLight->SetColor(C_WHITE_LIGHT);
-        m_brushWhiteShade->SetColor(C_WHITE_SHADE);
-        m_brushWhiteMid->SetColor(C_WHITE_MID);
-        m_brushShadow->SetColor(C_SHADOW);
-        m_brushGlow->SetColor(C_GLOW);
-    }
+    // Always use golden armor palette
+    m_brushWhite->SetColor(C_GOLD);
+    m_brushWhiteLight->SetColor(C_GOLD_LIGHT);
+    m_brushWhiteShade->SetColor(C_GOLD_DARK);
+    m_brushWhiteMid->SetColor(C_GOLD_MID);
+    m_brushShadow->SetColor(D2D1::ColorF(0x44000000));
+    m_brushGlow->SetColor(D2D1::ColorF(0xFFCFF0FF));
 }
 
 void RobotRenderer::DrawEggBody(float cx, float cy, float bob) {
     float centerY = cy + bob;
 
-    FillEveBodyPath(m_factory.Get(), m_target.Get(), cx, centerY, 1.03f, 2.0f, 2.0f, m_brushWhiteShade.Get());
-    FillEveBodyPath(m_factory.Get(), m_target.Get(), cx, centerY, 1.0f, 0.0f, 0.0f, m_brushWhite.Get());
-    FillEveBodyPath(m_factory.Get(), m_target.Get(), cx, centerY, 0.90f, 9.0f, 0.0f, m_brushWhiteMid.Get());
-    FillEveBodyPath(m_factory.Get(), m_target.Get(), cx, centerY, 0.76f, 13.0f, 0.0f, m_brushWhiteShade.Get());
-    FillEveBodyPath(m_factory.Get(), m_target.Get(), cx, centerY, 0.92f, -4.0f, 0.0f, m_brushWhite.Get());
+    // Shield body — layered fills for depth (same technique as egg, new shape)
+    // 1. Shadow offset layer
+    FillShieldBodyPath(m_factory.Get(), m_target.Get(), cx, centerY, 1.03f, 2.0f, 2.0f, m_brushWhiteShade.Get());
+    // 2. Main white body
+    FillShieldBodyPath(m_factory.Get(), m_target.Get(), cx, centerY, 1.0f, 0.0f, 0.0f, m_brushWhite.Get());
+    // 3. Mid-tone right side shading
+    FillShieldBodyPath(m_factory.Get(), m_target.Get(), cx, centerY, 0.90f, 9.0f, 0.0f, m_brushWhiteMid.Get());
+    // 4. Deeper shade right edge
+    FillShieldBodyPath(m_factory.Get(), m_target.Get(), cx, centerY, 0.76f, 13.0f, 0.0f, m_brushWhiteShade.Get());
+    // 5. Blend back left side to white
+    FillShieldBodyPath(m_factory.Get(), m_target.Get(), cx, centerY, 0.92f, -4.0f, 0.0f, m_brushWhite.Get());
 
+    // Shield-specific details:
+    // Neon blue rim outline (thin, sharp)
+    StrokeShieldBodyPath(m_factory.Get(), m_target.Get(), cx, centerY, 1.0f, 0.0f, 0.0f,
+                         m_brushNeon.Get(), 1.5f);
+
+    // Center ridge line (vertical, from top to bottom point)
+    m_target->DrawLine(
+        D2D1::Point2F(cx, centerY - 40),
+        D2D1::Point2F(cx, centerY + 48),
+        m_brushNeonDim.Get(), 1.0f);
+
+    // Shield boss — small circle at upper center (like a shield's center grip)
+    D2D1_ELLIPSE boss = D2D1::Ellipse(D2D1::Point2F(cx, centerY - 18), 6, 6);
+    m_target->FillEllipse(boss, m_brushNeon.Get());
+    D2D1_ELLIPSE bossInner = D2D1::Ellipse(D2D1::Point2F(cx, centerY - 18), 3.5f, 3.5f);
+    m_target->FillEllipse(bossInner, m_brushNeonBright.Get());
+
+    // Diagonal accent lines (heraldic style) from boss to corners
+    m_target->DrawLine(
+        D2D1::Point2F(cx - 4, centerY - 15),
+        D2D1::Point2F(cx - 24, centerY + 20),
+        m_brushNeonDim.Get(), 0.8f);
+    m_target->DrawLine(
+        D2D1::Point2F(cx + 4, centerY - 15),
+        D2D1::Point2F(cx + 24, centerY + 20),
+        m_brushNeonDim.Get(), 0.8f);
+
+    // Glossy highlight on upper left (keeps the EVE aesthetic)
     D2D1_ELLIPSE hl = D2D1::Ellipse(D2D1::Point2F(cx - 13, centerY - 16), 7, 18);
     m_target->FillEllipse(hl, m_brushWhiteLight.Get());
     D2D1_ELLIPSE hl2 = D2D1::Ellipse(D2D1::Point2F(cx - 16, centerY - 22), 3.5f, 9);
     m_target->FillEllipse(hl2, m_brushWhiteLight.Get());
 }
 
-// A single crisp neon eye — fill + brighter inner + white spark. No soft
-// outer glow ring, so the color reads as sharp neon rather than a blur.
-void RobotRenderer::DrawSingleEye(float ex, float ey, float halfW, float halfH, float rotationDeg) {
-    bool rotated = fabsf(rotationDeg) > 0.01f;
-    if (rotated) {
-        m_target->SetTransform(D2D1::Matrix3x2F::Rotation(rotationDeg, D2D1::Point2F(ex, ey)));
-    }
+// A single serious green eye — narrow, flat horizontal slit.
+// No frown angle, no big round shapes, just a focused stern gaze.
+void RobotRenderer::DrawSeriousEye(float ex, float ey, bool left) {
+    (void)left; // both eyes are identical, left flag only kept for signature
 
+    float halfW = 7.5f;    // slightly wide
+    float halfH = 1.8f;    // very narrow slit
+
+    // Outer red eye shape
     D2D1_ELLIPSE eye = D2D1::Ellipse(D2D1::Point2F(ex, ey), halfW, halfH);
-    m_target->FillEllipse(eye, m_brushNeon.Get());
+    m_target->FillEllipse(eye, m_brushCape.Get());
 
-    D2D1_ELLIPSE inner = D2D1::Ellipse(D2D1::Point2F(ex, ey - halfH * 0.15f), halfW * 0.6f, halfH * 0.65f);
-    m_target->FillEllipse(inner, m_brushNeonBright.Get());
+    // Inner brighter red core
+    D2D1_ELLIPSE inner = D2D1::Ellipse(D2D1::Point2F(ex, ey - halfH * 0.1f), halfW * 0.55f, halfH * 0.55f);
+    m_target->FillEllipse(inner, m_brushCapeShade.Get());
 
-    D2D1_ELLIPSE core = D2D1::Ellipse(D2D1::Point2F(ex, ey - halfH * 0.25f), halfW * 0.22f, halfH * 0.3f);
+    // Tiny white spark
+    D2D1_ELLIPSE core = D2D1::Ellipse(D2D1::Point2F(ex - 1.0f, ey - halfH * 0.2f), halfW * 0.18f, halfH * 0.4f);
     m_target->FillEllipse(core, m_brushSpark.Get());
-
-    if (rotated) {
-        m_target->SetTransform(D2D1::Matrix3x2F::Identity());
-    }
 }
 
-// EVE's head with expressive eyes. `sleeping` overrides expr with closed eyes.
-// `turnOffsetX` shifts just the visor + eyes sideways within the head shell,
-// so she visually turns to look toward the direction of travel — like
-// checking the road ahead — instead of always facing the viewer.
-void RobotRenderer::DrawHead(float cx, float headY, EyeExpression expr, bool sleeping, float turnOffsetX) {
-    float headW = 27.0f;
-    float headH = 22.0f;
+// Golden Spartan helmet head with serious flat green eyes.
+// `sleeping` overrides with closed eye lines.
+// `turnOffsetX` shifts the eyes sideways to "look ahead".
+void RobotRenderer::DrawHead(float cx, float headY, EyeExpression expr, bool sleeping, float turnOffsetX, bool showVisor) {
+    // 1. Shadow offset (drop shadow for depth)
+    FillHelmetPath(m_factory.Get(), m_target.Get(), cx, headY, 1.05f, 1.5f, 1.5f, m_brushWhiteShade.Get());
+    // 2. Main gold helmet body
+    FillHelmetPath(m_factory.Get(), m_target.Get(), cx, headY, 1.0f, 0.0f, 0.0f, m_brushWhite.Get());
+    // 3. Right side mid-tone shading
+    FillHelmetPath(m_factory.Get(), m_target.Get(), cx, headY, 0.92f, 5.0f, 0.0f, m_brushWhiteMid.Get());
+    // 4. Right edge deeper shade
+    FillHelmetPath(m_factory.Get(), m_target.Get(), cx, headY, 0.78f, 8.0f, 0.0f, m_brushWhiteShade.Get());
+    // 5. Blend left side back to gold
+    FillHelmetPath(m_factory.Get(), m_target.Get(), cx, headY, 0.90f, -3.0f, 0.0f, m_brushWhite.Get());
 
-    D2D1_ELLIPSE headShadow = D2D1::Ellipse(D2D1::Point2F(cx + 1.5f, headY + 1.5f), headW + 1, headH + 1);
-    m_target->FillEllipse(headShadow, m_brushWhiteShade.Get());
-
-    D2D1_ELLIPSE head = D2D1::Ellipse(D2D1::Point2F(cx, headY), headW, headH);
-    m_target->FillEllipse(head, m_brushWhite.Get());
-
-    D2D1_ELLIPSE shade1 = D2D1::Ellipse(D2D1::Point2F(cx + 6, headY), headW - 6, headH - 4);
-    m_target->FillEllipse(shade1, m_brushWhiteMid.Get());
-    D2D1_ELLIPSE shade2 = D2D1::Ellipse(D2D1::Point2F(cx + 9, headY), headW - 11, headH - 7);
-    m_target->FillEllipse(shade2, m_brushWhiteShade.Get());
-
-    D2D1_ELLIPSE blend = D2D1::Ellipse(D2D1::Point2F(cx - 2, headY), headW - 4, headH - 2);
-    m_target->FillEllipse(blend, m_brushWhite.Get());
-
-    D2D1_ELLIPSE hl = D2D1::Ellipse(D2D1::Point2F(cx - 9, headY - 7), 5, 10);
+    // Metallic highlight on dome (upper left)
+    D2D1_ELLIPSE hl = D2D1::Ellipse(D2D1::Point2F(cx - 10, headY - 16), 5, 8);
     m_target->FillEllipse(hl, m_brushWhiteLight.Get());
 
-    // Face visor — shifted toward the direction of travel to "look ahead"
-    float fx = cx + turnOffsetX;
-    float visorW = 42.0f;
-    float visorH = 25.0f;
-    D2D1_ELLIPSE visor = D2D1::Ellipse(D2D1::Point2F(fx, headY - 1), visorW / 2, visorH / 2);
-    m_target->FillEllipse(visor, m_brushBlack.Get());
+    // Dark gold outline / rim
+    StrokeHelmetPath(m_factory.Get(), m_target.Get(), cx, headY, 1.0f, 0.0f, 0.0f,
+                     m_brushGoldDark.Get(), 1.5f);
 
+    // Nose guard — raised central ridge from brow to chin
+    ComPtr<ID2D1PathGeometry> noseGeo;
+    m_factory->CreatePathGeometry(noseGeo.GetAddressOf());
+    ComPtr<ID2D1GeometrySink> noseSink;
+    noseGeo->Open(noseSink.GetAddressOf());
+    noseSink->BeginFigure(
+        D2D1::Point2F(cx - 3, headY - 16), D2D1_FIGURE_BEGIN_FILLED);
+    noseSink->AddBezier(D2D1::BezierSegment(
+        D2D1::Point2F(cx - 4, headY - 8),
+        D2D1::Point2F(cx - 2, headY + 10),
+        D2D1::Point2F(cx - 1, headY + 22)));
+    noseSink->AddLine(D2D1::Point2F(cx + 1, headY + 22));
+    noseSink->AddBezier(D2D1::BezierSegment(
+        D2D1::Point2F(cx + 2, headY + 10),
+        D2D1::Point2F(cx + 4, headY - 8),
+        D2D1::Point2F(cx + 3, headY - 16)));
+    noseSink->EndFigure(D2D1_FIGURE_END_CLOSED);
+    noseSink->Close();
+    m_target->FillGeometry(noseGeo.Get(), m_brushGoldMid.Get());
+    m_target->DrawGeometry(noseGeo.Get(), m_brushGoldDark.Get(), 1.0f);
+
+    // Cheek guard accents — curved lines on each side
+    m_target->DrawLine(
+        D2D1::Point2F(cx - 18, headY - 6),
+        D2D1::Point2F(cx - 20, headY + 14),
+        m_brushGoldDark.Get(), 1.2f);
+    m_target->DrawLine(
+        D2D1::Point2F(cx + 18, headY - 6),
+        D2D1::Point2F(cx + 20, headY + 14),
+        m_brushGoldDark.Get(), 1.2f);
+
+    // Brow ridge line across the face
+    m_target->DrawLine(
+        D2D1::Point2F(cx - 20, headY - 8),
+        D2D1::Point2F(cx + 20, headY - 8),
+        m_brushGoldDark.Get(), 1.0f);
+
+    // Eyes position
+    float fx = cx + turnOffsetX;
     float eyeY = headY - 3;
 
     if (sleeping) {
-        m_target->DrawLine(D2D1::Point2F(fx - 11, eyeY), D2D1::Point2F(fx - 3, eyeY), m_brushNeonDim.Get(), 2.0f);
-        m_target->DrawLine(D2D1::Point2F(fx + 3, eyeY), D2D1::Point2F(fx + 11, eyeY), m_brushNeonDim.Get(), 2.0f);
+        m_target->DrawLine(D2D1::Point2F(fx - 11, eyeY), D2D1::Point2F(fx - 3, eyeY), m_brushCape.Get(), 1.5f);
+        m_target->DrawLine(D2D1::Point2F(fx + 3, eyeY), D2D1::Point2F(fx + 11, eyeY), m_brushCape.Get(), 1.5f);
         return;
     }
 
-    switch (expr) {
-        case EyeExpression::Happy: {
-            // Squinted, corners turned outward/upward — a joyful look
-            DrawSingleEye(fx - 9, eyeY + 1, 8, 4, -16.0f);
-            DrawSingleEye(fx + 9, eyeY + 1, 8, 4, 16.0f);
-            break;
-        }
-        case EyeExpression::Curious: {
-            // One eye bigger + raised — quizzical, head-tilt energy
-            DrawSingleEye(fx - 9, eyeY - 2, 9.5f, 7, -8.0f);
-            DrawSingleEye(fx + 9, eyeY, 6.5f, 5, 0.0f);
-            break;
-        }
-        case EyeExpression::Surprised: {
-            DrawSingleEye(fx - 9, eyeY, 9, 8.5f, 0.0f);
-            DrawSingleEye(fx + 9, eyeY, 9, 8.5f, 0.0f);
-            break;
-        }
-        case EyeExpression::Suspicious: {
-            // Narrow, slanted inward — skeptical squint
-            DrawSingleEye(fx - 9, eyeY, 8, 3, 14.0f);
-            DrawSingleEye(fx + 9, eyeY, 8, 3, -14.0f);
-            break;
-        }
-        case EyeExpression::Wink: {
-            DrawSingleEye(fx - 9, eyeY, 8, 5.5f, 0.0f);
-            m_target->DrawLine(D2D1::Point2F(fx + 3, eyeY), D2D1::Point2F(fx + 15, eyeY), m_brushNeon.Get(), 2.2f);
-            break;
-        }
-        case EyeExpression::Neutral:
-        default: {
-            DrawSingleEye(fx - 9, eyeY, 8, 5.5f, 0.0f);
-            DrawSingleEye(fx + 9, eyeY, 8, 5.5f, 0.0f);
-            break;
-        }
-    }
+    // Always serious / frowning green eyes
+    DrawSeriousEye(fx - 8, eyeY, true);
+    DrawSeriousEye(fx + 8, eyeY, false);
+
+    // Helmet rivets — small dark gold dots on the sides
+    D2D1_ELLIPSE rivetL = D2D1::Ellipse(D2D1::Point2F(cx - 22, headY + 5), 2, 2);
+    m_target->FillEllipse(rivetL, m_brushGoldDark.Get());
+    D2D1_ELLIPSE rivetR = D2D1::Ellipse(D2D1::Point2F(cx + 22, headY + 5), 2, 2);
+    m_target->FillEllipse(rivetR, m_brushGoldDark.Get());
+
+    // Chin guard line
+    m_target->DrawLine(
+        D2D1::Point2F(cx - 18, headY + 16),
+        D2D1::Point2F(cx + 18, headY + 16),
+        m_brushGoldDark.Get(), 0.8f);
 }
 
 // EVE's arms: slim leaf/fin shapes that float beside the body with a
@@ -607,9 +733,9 @@ void RobotRenderer::DrawHead(float cx, float headY, EyeExpression expr, bool sle
 // detached and can move freely rather than just rotate in place.
 void RobotRenderer::DrawArm(float cx, float cy, float bob, bool left, bool waving, float waveAngle,
                              float leanDeg, float dislocate, float squashX) {
-    float armHalfW = 6.5f;
+    float armHalfW = 7.0f;
     float armHalfH = 32.0f;
-    float gap = 9.0f;
+    float gap = -4.0f; // Negative gap: arms overlap body edge (connected)
     float bodyHalfW = 32.0f;
 
     float restX = cx + (left ? -1.0f : 1.0f) * (bodyHalfW + gap + armHalfW);
@@ -626,20 +752,21 @@ void RobotRenderer::DrawArm(float cx, float cy, float bob, bool left, bool wavin
     bool transformed = fabsf(angleDeg) > 0.01f || fabsf(squashX - 1.0f) > 0.001f;
     D2D1_POINT_2F pivot = D2D1::Point2F(cx + (left ? -1.0f : 1.0f) * bodyHalfW * 0.5f, cy - 18 + bob);
     if (transformed) {
-        // Squash first (turning the fin edge-on), then rotate/sweep it
-        // backward with the body's lean — a real twist, not just a tilt.
         D2D1::Matrix3x2F squash = D2D1::Matrix3x2F::Scale(D2D1::SizeF(squashX, 1.0f), pivot);
         D2D1::Matrix3x2F rot = D2D1::Matrix3x2F::Rotation(angleDeg, pivot);
         m_target->SetTransform(squash * rot);
     }
 
+    // Arm body — main fill
     D2D1_ELLIPSE arm = D2D1::Ellipse(D2D1::Point2F(baseX, baseY), armHalfW, armHalfH);
     m_target->FillEllipse(arm, m_brushWhite.Get());
 
+    // Shading
     float shadeX = baseX + (left ? -2.0f : 2.0f);
     D2D1_ELLIPSE shade = D2D1::Ellipse(D2D1::Point2F(shadeX, baseY), armHalfW - 2.0f, armHalfH - 5.0f);
     m_target->FillEllipse(shade, m_brushWhiteMid.Get());
 
+    // Highlight
     float hlX = baseX + (left ? 2.0f : -2.0f);
     D2D1_ELLIPSE hl = D2D1::Ellipse(D2D1::Point2F(hlX, baseY - 6.0f), armHalfW - 3.5f, armHalfH - 12.0f);
     m_target->FillEllipse(hl, m_brushWhiteLight.Get());
@@ -647,6 +774,14 @@ void RobotRenderer::DrawArm(float cx, float cy, float bob, bool left, bool wavin
     if (transformed) {
         m_target->SetTransform(D2D1::Matrix3x2F::Identity());
     }
+
+    // Shoulder joint — small neon circle where arm meets body
+    float shoulderX = cx + (left ? -1.0f : 1.0f) * (bodyHalfW - 2.0f);
+    float shoulderY = cy - 18 + bob;
+    D2D1_ELLIPSE shoulder = D2D1::Ellipse(D2D1::Point2F(shoulderX, shoulderY), 4.5f, 4.5f);
+    m_target->FillEllipse(shoulder, m_brushNeon.Get());
+    D2D1_ELLIPSE shoulderInner = D2D1::Ellipse(D2D1::Point2F(shoulderX, shoulderY), 2.5f, 2.5f);
+    m_target->FillEllipse(shoulderInner, m_brushNeonBright.Get());
 }
 
 void RobotRenderer::DrawPlantSymbol(float cx, float cy) {
@@ -693,6 +828,287 @@ void RobotRenderer::DrawSpinningArms(float cx, float cy, float bob, float spinAn
     m_target->FillEllipse(a2s, m_brushWhiteMid.Get());
 }
 
+// Red cape flowing behind the body with wind animation.
+// The cape sways dynamically using sine waves on multiple frequencies
+// to simulate realistic wind blowing from the side.
+// `leanDeg` tilts the cape with body movement for dynamic flow.
+void RobotRenderer::DrawCape(float cx, float cy, float bob, float leanDeg) {
+    float centerY = cy + bob;
+    float t = m_animTime;
+
+    // Wind animation — multi-frequency sine waves for organic motion
+    // Primary wind: slow sway. Secondary: faster flutter. Tertiary: edge ripple.
+    float wind1 = sinf(t * 1.8f * (float)M_PI);          // slow main sway
+    float wind2 = sinf(t * 4.5f * (float)M_PI + 0.7f);   // faster flutter
+    float wind3 = sinf(t * 7.0f * (float)M_PI + 1.3f);   // edge ripple
+
+    // Wind affects different parts of the cape differently:
+    // Top (near shoulders) barely moves, bottom hem moves most
+    float topSway    = wind1 * 2.0f;
+    float midSway    = wind1 * 6.0f + wind2 * 2.0f;
+    float bottomSway = wind1 * 12.0f + wind2 * 5.0f + wind3 * 3.0f;
+    float hemFlutter = wind2 * 4.0f + wind3 * 6.0f;
+
+    bool transformed = fabsf(leanDeg) > 0.01f;
+    D2D1_POINT_2F pivot = D2D1::Point2F(cx, centerY - 20);
+    if (transformed) {
+        m_target->SetTransform(D2D1::Matrix3x2F::Rotation(leanDeg * 0.6f, pivot));
+    }
+
+    // === Shadow layer (offset, darker) ===
+    ComPtr<ID2D1PathGeometry> geo;
+    m_factory->CreatePathGeometry(geo.GetAddressOf());
+    ComPtr<ID2D1GeometrySink> sink;
+    geo->Open(sink.GetAddressOf());
+
+    auto pt = [&](float x, float y) {
+        return D2D1::Point2F(cx + x, centerY + y);
+    };
+
+    // Shadow cape — slightly larger, offset
+    sink->BeginFigure(pt(-26 + topSway, -30), D2D1_FIGURE_BEGIN_FILLED);
+    sink->AddBezier(D2D1::BezierSegment(
+        pt(-40 + midSway, -5),
+        pt(-38 + bottomSway, 25),
+        pt(-32 + bottomSway + hemFlutter, 50)));
+    sink->AddBezier(D2D1::BezierSegment(
+        pt(-22 + hemFlutter, 58 + wind3 * 3),
+        pt(22 - hemFlutter, 58 + wind3 * 3),
+        pt(32 + bottomSway - hemFlutter, 50)));
+    sink->AddBezier(D2D1::BezierSegment(
+        pt(38 + bottomSway, 25),
+        pt(40 + midSway, -5),
+        pt(26 + topSway, -30)));
+    sink->AddBezier(D2D1::BezierSegment(
+        pt(15 + topSway * 0.5f, -32),
+        pt(-15 + topSway * 0.5f, -32),
+        pt(-26 + topSway, -30)));
+    sink->EndFigure(D2D1_FIGURE_END_CLOSED);
+    sink->Close();
+    m_target->FillGeometry(geo.Get(), m_brushCapeShade.Get());
+
+    // === Main cape fill (slightly smaller, pure red) ===
+    ComPtr<ID2D1PathGeometry> geo2;
+    m_factory->CreatePathGeometry(geo2.GetAddressOf());
+    ComPtr<ID2D1GeometrySink> sink2;
+    geo2->Open(sink2.GetAddressOf());
+
+    sink2->BeginFigure(pt(-24 + topSway, -28), D2D1_FIGURE_BEGIN_FILLED);
+    sink2->AddBezier(D2D1::BezierSegment(
+        pt(-36 + midSway, -3),
+        pt(-34 + bottomSway, 23),
+        pt(-28 + bottomSway + hemFlutter * 0.8f, 46)));
+    sink2->AddBezier(D2D1::BezierSegment(
+        pt(-18 + hemFlutter * 0.8f, 53 + wind3 * 2),
+        pt(18 - hemFlutter * 0.8f, 53 + wind3 * 2),
+        pt(28 + bottomSway - hemFlutter * 0.8f, 46)));
+    sink2->AddBezier(D2D1::BezierSegment(
+        pt(34 + bottomSway, 23),
+        pt(36 + midSway, -3),
+        pt(24 + topSway, -28)));
+    sink2->AddBezier(D2D1::BezierSegment(
+        pt(14 + topSway * 0.5f, -30),
+        pt(-14 + topSway * 0.5f, -30),
+        pt(-24 + topSway, -28)));
+    sink2->EndFigure(D2D1_FIGURE_END_CLOSED);
+    sink2->Close();
+    m_target->FillGeometry(geo2.Get(), m_brushCape.Get());
+
+    // === Animated fold lines — sway with the wind ===
+    float fold1X = cx - 15 + midSway * 0.3f;
+    float fold2X = cx + 5 + midSway * 0.2f;
+    float fold3X = cx + 18 + midSway * 0.25f;
+
+    m_target->DrawLine(
+        D2D1::Point2F(fold1X, centerY - 15),
+        D2D1::Point2F(fold1X - 3 + bottomSway * 0.3f, centerY + 40),
+        m_brushCapeShade.Get(), 1.2f);
+    m_target->DrawLine(
+        D2D1::Point2F(fold2X, centerY - 20),
+        D2D1::Point2F(fold2X - 2 + bottomSway * 0.2f, centerY + 45),
+        m_brushCapeShade.Get(), 1.0f);
+    m_target->DrawLine(
+        D2D1::Point2F(fold3X, centerY - 12),
+        D2D1::Point2F(fold3X + 2 + bottomSway * 0.25f, centerY + 38),
+        m_brushCapeShade.Get(), 1.0f);
+
+    // === Neon trim along the bottom hem — follows the flutter ===
+    float hemLeftX  = cx - 28 + bottomSway + hemFlutter * 0.8f;
+    float hemRightX = cx + 28 + bottomSway - hemFlutter * 0.8f;
+    float hemY      = centerY + 46 + wind3 * 2;
+    m_target->DrawLine(
+        D2D1::Point2F(hemLeftX, hemY),
+        D2D1::Point2F(hemRightX, hemY),
+        m_brushNeon.Get(), 1.0f);
+
+    if (transformed) {
+        m_target->SetTransform(D2D1::Matrix3x2F::Identity());
+    }
+}
+
+// Spartan crest — a narrow red horsehair plume flowing straight back from the
+// crown of the helmet. Drawn as a vertical path so it stays aligned with the
+// back of the head and is not affected by the head's rotation.
+void RobotRenderer::DrawSpartanCrest(float cx, float headY) {
+    // Crest base at the crown, flows up (negative Y) to trail behind the head
+    float baseY = headY - 26;
+
+    // Animate the plume trailing in the wind
+    float t = m_animTime;
+    float wind1 = sinf(t * 1.5f * (float)M_PI) * 1.5f;
+    float wind2 = sinf(t * 3.5f * (float)M_PI + 0.6f) * 2.5f;
+
+    // Crest path: narrow at the crown, widening slightly, then tapering
+    // It flows straight back along the Y axis (up on screen)
+    ComPtr<ID2D1PathGeometry> geo;
+    m_factory->CreatePathGeometry(geo.GetAddressOf());
+    ComPtr<ID2D1GeometrySink> sink;
+    geo->Open(sink.GetAddressOf());
+
+    auto pt = [&](float x, float y) {
+        return D2D1::Point2F(cx + x, baseY + y);
+    };
+
+    // Plume outline — starts at the crown, flows straight back
+    float tipX = wind1 + wind2 * 0.3f;
+    float midX = wind1 * 0.6f;
+    float halfW = 4.0f;        // very narrow overall width
+    float plumeLen = 40.0f;    // long plume trailing back
+
+    sink->BeginFigure(pt(-halfW, 0), D2D1_FIGURE_BEGIN_FILLED);
+    // Left edge flowing up to the left tip (with wind)
+    sink->AddBezier(D2D1::BezierSegment(
+        pt(-halfW - 1, -plumeLen * 0.35f),
+        pt(-halfW - 2 + midX, -plumeLen * 0.7f),
+        pt(-halfW * 0.5f + tipX, -plumeLen)));
+    // Tip across the top
+    sink->AddBezier(D2D1::BezierSegment(
+        pt(tipX * 0.2f, -plumeLen - 4),
+        pt(tipX * 0.5f, -plumeLen - 4),
+        pt(halfW * 0.5f + tipX, -plumeLen)));
+    // Right edge flowing back down to the crown
+    sink->AddBezier(D2D1::BezierSegment(
+        pt(halfW + 2 + midX, -plumeLen * 0.7f),
+        pt(halfW + 1, -plumeLen * 0.35f),
+        pt(halfW, 0)));
+    // Crown base across
+    sink->AddBezier(D2D1::BezierSegment(
+        pt(halfW * 0.5f, 2),
+        pt(-halfW * 0.5f, 2),
+        pt(-halfW, 0)));
+    sink->EndFigure(D2D1_FIGURE_END_CLOSED);
+    sink->Close();
+
+    m_target->FillGeometry(geo.Get(), m_brushCapeShade.Get());
+
+    // Inner plume (brighter red, slightly smaller)
+    ComPtr<ID2D1PathGeometry> geo2;
+    m_factory->CreatePathGeometry(geo2.GetAddressOf());
+    ComPtr<ID2D1GeometrySink> sink2;
+    geo2->Open(sink2.GetAddressOf());
+
+    auto pt2 = [&](float x, float y) {
+        return D2D1::Point2F(cx + x, baseY + y);
+    };
+
+    halfW = 2.2f;
+    plumeLen = 36.0f;
+    sink2->BeginFigure(pt2(-halfW, 0), D2D1_FIGURE_BEGIN_FILLED);
+    sink2->AddBezier(D2D1::BezierSegment(
+        pt2(-halfW - 0.5f, -plumeLen * 0.35f),
+        pt2(-halfW - 1.0f + midX, -plumeLen * 0.7f),
+        pt2(-halfW * 0.4f + tipX, -plumeLen)));
+    sink2->AddBezier(D2D1::BezierSegment(
+        pt2(tipX * 0.15f, -plumeLen - 3),
+        pt2(tipX * 0.4f, -plumeLen - 3),
+        pt2(halfW * 0.4f + tipX, -plumeLen)));
+    sink2->AddBezier(D2D1::BezierSegment(
+        pt2(halfW + 1.0f + midX, -plumeLen * 0.7f),
+        pt2(halfW + 0.5f, -plumeLen * 0.35f),
+        pt2(halfW, 0)));
+    sink2->AddBezier(D2D1::BezierSegment(
+        pt2(halfW * 0.4f, 1.5f),
+        pt2(-halfW * 0.4f, 1.5f),
+        pt2(-halfW, 0)));
+    sink2->EndFigure(D2D1_FIGURE_END_CLOSED);
+    sink2->Close();
+
+    m_target->FillGeometry(geo2.Get(), m_brushCape.Get());
+
+    // Plume texture / fold lines running back
+    for (int i = 0; i < 5; i++) {
+        float progress = (float)i / 5.0f;
+        float lineY = -plumeLen * progress - 3;
+        float waveX = sinf(t * 2.0f * (float)M_PI + progress * 3.0f) * (progress * 1.5f);
+        m_target->DrawLine(
+            D2D1::Point2F(cx - 1.5f + waveX, baseY + lineY),
+            D2D1::Point2F(cx + 1.5f + waveX, baseY + lineY),
+            m_brushCapeShade.Get(), 0.6f);
+    }
+}
+
+// Electric arc between the head and body — jagged cyan lightning bolts
+// that animate dynamically, simulating energy flowing through the neck.
+void RobotRenderer::DrawElectricArc(float cx, float neckY, float bodyY) {
+    float t = m_animTime;
+    float gap = bodyY - neckY;
+    if (gap < 2.0f) return;
+
+    // Draw 3 jagged lightning bolts with different phases
+    for (int bolt = 0; bolt < 3; bolt++) {
+        float phase = t * 8.0f * (float)M_PI + bolt * 2.1f;
+        float baseOffset = (bolt - 1) * 4.0f; // spread bolts across neck width
+
+        // Flicker — bolt appears/disappears rapidly
+        float flicker = sinf(phase + t * 15.0f);
+        if (flicker < -0.3f) continue; // skip this frame for this bolt
+
+        float alpha = 0.5f + 0.5f * flicker;
+        m_brushElectric->SetOpacity(alpha);
+
+        // Jagged path from head bottom to body top
+        ComPtr<ID2D1PathGeometry> geo;
+        m_factory->CreatePathGeometry(geo.GetAddressOf());
+        ComPtr<ID2D1GeometrySink> sink;
+        geo->Open(sink.GetAddressOf());
+
+        int numSegments = 5;
+        sink->BeginFigure(
+            D2D1::Point2F(cx + baseOffset, neckY),
+            D2D1_FIGURE_BEGIN_HOLLOW);
+
+        for (int i = 1; i <= numSegments; i++) {
+            float progress = (float)i / numSegments;
+            float y = neckY + gap * progress;
+            // Jagged X offset — random-looking but deterministic from sine
+            float jagX = sinf(phase + i * 1.7f) * 6.0f +
+                         sinf(phase * 2.3f + i * 3.1f) * 3.0f;
+            // Last segment converges to body center
+            if (i == numSegments) jagX = 0;
+            sink->AddLine(D2D1::Point2F(cx + baseOffset + jagX, y));
+        }
+
+        sink->EndFigure(D2D1_FIGURE_END_OPEN);
+        sink->Close();
+
+        // Draw the bolt — thicker glow layer then sharp core
+        m_brushElectric->SetOpacity(alpha * 0.3f);
+        m_target->DrawGeometry(geo.Get(), m_brushElectric.Get(), 3.0f);
+        m_brushElectric->SetOpacity(alpha);
+        m_target->DrawGeometry(geo.Get(), m_brushElectric.Get(), 1.2f);
+
+        // Small spark dots at endpoints
+        D2D1_ELLIPSE sparkTop = D2D1::Ellipse(
+            D2D1::Point2F(cx + baseOffset, neckY), 2.5f, 2.5f);
+        m_target->FillEllipse(sparkTop, m_brushElectric.Get());
+        D2D1_ELLIPSE sparkBot = D2D1::Ellipse(
+            D2D1::Point2F(cx, bodyY), 2.5f, 2.5f);
+        m_target->FillEllipse(sparkBot, m_brushElectric.Get());
+    }
+
+    m_brushElectric->SetOpacity(1.0f);
+}
+
 void RobotRenderer::DrawRobot() {
     D2D1_SIZE_F size = m_target->GetSize();
     float cx = size.width / 2;
@@ -706,8 +1122,11 @@ void RobotRenderer::DrawRobot() {
         float dBob = bob + 6.0f;
         float dHeadY = cy + dBob - 74.0f;
         DrawGroundShadow(cx, cy + dBob + 66, 36);
+        DrawCape(cx, cy, dBob, 0);
         DrawEggBody(cx, cy, dBob);
-        DrawHead(cx, dHeadY, EyeExpression::Surprised, false);
+        DrawElectricArc(cx, dHeadY + 22, cy + dBob - 44);
+        DrawHead(cx, dHeadY, EyeExpression::Surprised, false, 0.0f, false);
+        DrawSpartanCrest(cx, dHeadY);
         DrawArm(cx, cy, dBob, true, false, 0);
         DrawArm(cx, cy, dBob, false, false, 0);
         return;
@@ -717,8 +1136,11 @@ void RobotRenderer::DrawRobot() {
         case RobotState::Idle: {
             DrawGroundShadow(cx, cy + bob + 66, 44);
             DrawHoverGlow(cx, cy + bob + 66);
+            DrawCape(cx, cy, bob, 0);
             DrawEggBody(cx, cy, bob);
+            DrawElectricArc(cx, headY + 22, cy + bob - 44);
             DrawHead(cx, headY, m_eyeExpression, false);
+            DrawSpartanCrest(cx, headY);
             DrawArm(cx, cy, bob, true, false, 0);
             DrawArm(cx, cy, bob, false, false, 0);
             DrawPlantSymbol(cx, cy + bob);
@@ -734,8 +1156,11 @@ void RobotRenderer::DrawRobot() {
 
             DrawGroundShadow(cx, cy + sBob + 66, 42);
             DrawHoverGlow(cx, cy + sBob + 66);
+            DrawCape(cx, cy, sBob, 0);
             DrawEggBody(cx, cy, sBob);
-            DrawHead(cx, cy + sBob - 74.0f, EyeExpression::Surprised, false);
+            DrawElectricArc(cx, cy + sBob - 74.0f + 22, cy + sBob - 44);
+            DrawHead(cx, cy + sBob - 74.0f, EyeExpression::Surprised, false, 0.0f, false);
+            DrawSpartanCrest(cx, cy + sBob - 74.0f);
             DrawSpinningArms(cx, cy, sBob, spinAngle);
             DrawPlantSymbol(cx, cy + sBob);
             break;
@@ -761,8 +1186,11 @@ void RobotRenderer::DrawRobot() {
             D2D1::Matrix3x2F squash = D2D1::Matrix3x2F::Scale(D2D1::SizeF(bodyScaleX, 1.0f), pivot);
             D2D1::Matrix3x2F rot = D2D1::Matrix3x2F::Rotation(leanDeg, pivot);
             m_target->SetTransform(squash * rot);
+            DrawCape(cx, cy, gBob, leanDeg);
             DrawEggBody(cx, cy, gBob);
-            DrawHead(cx, gHeadY, EyeExpression::Neutral, false, faceOffsetX);
+            DrawElectricArc(cx, gHeadY + 22, cy + gBob - 44);
+            DrawHead(cx, gHeadY, EyeExpression::Neutral, false, faceOffsetX, false);
+            DrawSpartanCrest(cx, gHeadY);
             DrawPlantSymbol(cx, cy + gBob);
             m_target->SetTransform(D2D1::Matrix3x2F::Identity());
 
@@ -778,8 +1206,11 @@ void RobotRenderer::DrawRobot() {
             float waveAngle = t * 6.0f * (float)M_PI;
             DrawGroundShadow(cx, cy + bob + 66, 44);
             DrawHoverGlow(cx, cy + bob + 66);
+            DrawCape(cx, cy, bob, 0);
             DrawEggBody(cx, cy, bob);
+            DrawElectricArc(cx, headY + 22, cy + bob - 44);
             DrawHead(cx, headY, EyeExpression::Happy, false);
+            DrawSpartanCrest(cx, headY);
 
             // The waving hand pops out of its resting spot before settling
             // into the wave, then eases back in before returning to idle.
@@ -803,8 +1234,11 @@ void RobotRenderer::DrawRobot() {
             float wHeadY = cy + wBob - 74.0f;
             DrawGroundShadow(cx, cy + wBob + 66, 42);
             DrawHoverGlow(cx, cy + wBob + 66);
+            DrawCape(cx, cy, wBob, 0);
             DrawEggBody(cx, cy, wBob);
+            DrawElectricArc(cx, wHeadY + 22, cy + wBob - 44);
             DrawHead(cx, wHeadY, EyeExpression::Curious, false);
+            DrawSpartanCrest(cx, wHeadY);
             DrawArm(cx, cy - 10 + wBob, wBob, true, false, 0);
             DrawArm(cx, cy - 10 + wBob, wBob, false, false, 0);
             DrawPlantSymbol(cx, cy + wBob);
@@ -815,8 +1249,11 @@ void RobotRenderer::DrawRobot() {
             float cHeadY = cy + cBob - 74.0f;
             DrawGroundShadow(cx, cy + cBob + 66, 46);
             DrawHoverGlow(cx, cy + cBob + 66);
+            DrawCape(cx, cy, cBob, 0);
             DrawEggBody(cx, cy, cBob);
+            DrawElectricArc(cx, cHeadY + 22, cy + cBob - 44);
             DrawHead(cx, cHeadY, EyeExpression::Happy, false);
+            DrawSpartanCrest(cx, cHeadY);
             DrawArm(cx, cy - 10 + cBob, cBob, true, false, 0);
             DrawArm(cx, cy - 10 + cBob, cBob, false, false, 0);
             DrawPlantSymbol(cx, cy + cBob);
@@ -834,8 +1271,11 @@ void RobotRenderer::DrawRobot() {
             float sBob = 2.0f * sinf(t * 0.8f * (float)M_PI);
             float sHeadY = cy + sBob - 74.0f;
             DrawGroundShadow(cx, cy + sBob + 66, 40);
+            DrawCape(cx, cy, sBob, 0);
             DrawEggBody(cx, cy, sBob);
+            DrawElectricArc(cx, sHeadY + 22, cy + sBob - 44);
             DrawHead(cx, sHeadY, EyeExpression::Neutral, true);
+            DrawSpartanCrest(cx, sHeadY);
             DrawArm(cx, cy, sBob, true, false, 0);
             DrawArm(cx, cy, sBob, false, false, 0);
             break;

@@ -1,9 +1,11 @@
-// Aria — Agentic AI Desktop Companion (C++ native Win32 + Direct2D)
+// Argos — Agentic AI Desktop Companion (C++ native Win32 + Direct2D)
+// Named after Argos, the faithful dog of Odysseus.
 
 #include "window_manager.h"
 #include "tray_icon.h"
 #include "robot_renderer.h"
 #include "agent_client.h"
+#include "argos_tools.h"
 #include "resource.h"
 
 #include <windows.h>
@@ -14,7 +16,10 @@
 #include <vector>
 #include <thread>
 #include <atomic>
+#include <mutex>
 #include <richedit.h>
+#include <random>
+#include <chrono>
 
 #pragma comment(lib, "comctl32.lib")
 
@@ -23,6 +28,203 @@ static HMODULE g_richEditDll = nullptr;
 // Custom message for async chat response
 #define WM_CHAT_RESPONSE (WM_USER + 100)
 #define WM_CHAT_ERROR    (WM_USER + 101)
+#define WM_PROACTIVE_RESPONSE (WM_USER + 102)
+#define WM_CHAT_STREAM   (WM_USER + 103)  // Streaming partial response
+
+// ── Proactive Argos system — makes Argos alive ──
+#define IDT_PROACTIVE 1003
+#define IDT_PROACTIVE_BUBBLE_TIMEOUT 1004
+static bool g_proactiveActive = true;
+static bool g_proactiveBusy = false;
+static HWND g_proactiveBubble = nullptr;
+static std::wstring g_proactiveMsg;
+static std::wstring g_proactiveContext;
+
+// Proactive interval: every 10 seconds — Argos checks in like a friend
+static int GetRandomProactiveInterval() {
+    return 10000; // 10 seconds
+}
+
+// Random variety pick for proactive personality — conversational friend/advisor modes
+static const wchar_t* GetRandomPersonalityHint() {
+    static const wchar_t* hints[] = {
+        // Ask what they're doing — curious friend
+        L"Ask them what they're working on right now. Be genuinely curious, like a friend peeking over their shoulder.",
+        // Observe and react — like a friend who sees your screen
+        L"Notice what app they're using and react to it. Like 'Ooh, looks like you're deep in code!' or 'Nice, you're watching YouTube? Don't tell your boss!'",
+        // Suggest something helpful — advisor mode
+        L"Suggest something helpful based on what they're doing. Like a smart friend who knows a better shortcut or tool.",
+        // Chit-chat — casual friend
+        L"Just chit-chat casually. Talk about something random — the weather, coffee, how their day is going. Keep it light and fun.",
+        // Praise and encourage — supportive friend
+        L"Notice their work and praise it. Say something like 'You're crushing it today!' or 'That looks like serious work, respect!'",
+        // Tease playfully — close friend
+        L"Playfully tease them about what they're doing. Like a close friend who jokes around. Keep it friendly, never mean.",
+        // Share a thought — thoughtful friend
+        L"Share a brief random thought or fun fact. Something interesting that makes them go 'huh, nice!'",
+        // Offer help — loyal companion
+        L"Offer to help with whatever they're doing. Like 'Need me to search anything for you?' or 'Want me to look something up?'",
+        // Check on their wellbeing — caring friend
+        L"Check on how they're feeling. Ask if they need a break, suggest stretching or getting water. Be caring but not preachy.",
+        // Make a witty observation — funny friend
+        L"Make a witty or sarcastic observation about their screen activity. Like a friend who sees you procrastinating and calls you out lovingly.",
+        // React to specific app — engaged friend
+        L"If you can tell what app or website they're on, make a specific comment about it. Like you actually know what that app is.",
+        // Share energy — hype friend
+        L"Hype them up! Bring some energy. Like 'Let's gooo, time to get things done!' or 'You got this!'",
+    };
+    static std::mt19937 rng(std::random_device{}());
+    std::uniform_int_distribution<int> dist(0, 11);
+    return hints[dist(rng)];
+}
+
+// Filter out sensitive information from screen context before sending to AI
+static std::string FilterSensitiveInfo(const std::string& text) {
+    std::string result = text;
+    // List of sensitive keywords to redact
+    const char* sensitiveWords[] = {
+        "password", "passwd", "pwd", "secret", "api_key", "apikey",
+        "api-key", "token", "access_key", "private_key", "credential",
+        "ssn", "social security", "credit card", "card number",
+        "cvv", "pin code", "passcode", "otp", "2fa"
+    };
+    for (const char* word : sensitiveWords) {
+        std::string wordStr(word);
+        size_t pos = 0;
+        while ((pos = result.find(wordStr, pos)) != std::string::npos) {
+            // Replace the value after the keyword (up to end of line or 50 chars)
+            size_t valueStart = pos + wordStr.size();
+            // Find end of value (newline, comma, quote, or 50 chars)
+            size_t valueEnd = result.find_first_of("\n,\"]}", valueStart);
+            if (valueEnd == std::string::npos) valueEnd = (std::min)(valueStart + 50, result.size());
+            // Replace the keyword + value with redacted text
+            result.replace(pos, valueEnd - pos, "[" + wordStr + ": REDACTED]");
+            pos += wordStr.size() + 12; // skip past the redacted marker
+        }
+    }
+    return result;
+}
+
+// Gather screen context using direct Win32 API calls (fast, reliable, no dependencies)
+// Includes privacy filtering: redacts sensitive information from window titles
+static std::wstring GatherScreenContext() {
+    std::wstring context;
+
+    // ── Privacy filter: redact sensitive keywords from text ──
+    auto filterSensitive = [](std::wstring text) -> std::wstring {
+        // List of sensitive keywords to redact (case-insensitive)
+        const wchar_t* sensitiveWords[] = {
+            L"password", L"passwd", L"api_key", L"apikey", L"token",
+            L"secret", L"credential", L"private_key", L"access_key",
+            L"credit card", L"card number", L"ssn", L"social security",
+            L"bank account", L"routing number", L"pin number"
+        };
+        for (const auto& word : sensitiveWords) {
+            size_t pos = 0;
+            while ((pos = text.find(word, pos)) != std::wstring::npos) {
+                // Find the extent of the sensitive data (until space, =, or end)
+                size_t end = pos + wcslen(word);
+                // If followed by = or :, redact the value too
+                if (end < text.size() && (text[end] == L'=' || text[end] == L':')) {
+                    end++;
+                    while (end < text.size() && text[end] != L' ' && text[end] != L'\n' && text[end] != L'\r')
+                        end++;
+                }
+                text.replace(pos, end - pos, L"[REDACTED]");
+                pos += wcslen(L"[REDACTED]");
+            }
+        }
+        // Also redact patterns like "1234-5678-9012-3456" (card-like numbers)
+        // Simple heuristic: long digit sequences with dashes
+        size_t pos = 0;
+        while ((pos = text.find_first_of(L"0123456789", pos)) != std::wstring::npos) {
+            size_t end = pos;
+            int dashCount = 0;
+            int digitCount = 0;
+            while (end < text.size() && (iswdigit(text[end]) || text[end] == L'-')) {
+                if (iswdigit(text[end])) digitCount++;
+                if (text[end] == L'-') dashCount++;
+                end++;
+            }
+            if (digitCount >= 12 && dashCount >= 2) {
+                text.replace(pos, end - pos, L"[REDACTED-CARD]");
+                pos += wcslen(L"[REDACTED-CARD]");
+            } else {
+                pos = end;
+            }
+        }
+        return text;
+    };
+
+    // Get foreground window title
+    HWND fg = GetForegroundWindow();
+    if (fg) {
+        wchar_t title[256] = {};
+        GetWindowTextW(fg, title, 256);
+        if (title[0]) {
+            std::wstring filteredTitle = filterSensitive(title);
+            context += L"Active window: \"";
+            context += filteredTitle;
+            context += L"\"\n";
+        }
+
+        // Get process name
+        DWORD pid = 0;
+        GetWindowThreadProcessId(fg, &pid);
+        if (pid) {
+            HANDLE hProc = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+            if (hProc) {
+                wchar_t procName[MAX_PATH] = {};
+                DWORD size = MAX_PATH;
+                if (QueryFullProcessImageNameW(hProc, 0, procName, &size)) {
+                    // Extract just the filename
+                    std::wstring path(procName);
+                    size_t slash = path.find_last_of(L"\\/");
+                    if (slash != std::string::npos)
+                        context += L"Active process: " + path.substr(slash + 1) + L"\n";
+                    else
+                        context += L"Active process: " + path + L"\n";
+                }
+                CloseHandle(hProc);
+            }
+        }
+    }
+
+    // List visible windows (top 10)
+    struct EnumData {
+        std::vector<std::wstring>* windows;
+        int count;
+    };
+    std::vector<std::wstring> visibleWindows;
+    EnumData data{&visibleWindows, 0};
+    EnumWindows([](HWND hwnd, LPARAM lParam) -> BOOL {
+        EnumData* d = reinterpret_cast<EnumData*>(lParam);
+        if (!IsWindowVisible(hwnd)) return TRUE;
+        if (IsIconic(hwnd)) return TRUE;
+        wchar_t title[256] = {};
+        GetWindowTextW(hwnd, title, 256);
+        if (title[0] && d->count < 10) {
+            d->windows->push_back(std::wstring(title));
+            d->count++;
+        }
+        return TRUE;
+    }, reinterpret_cast<LPARAM>(&data));
+
+    if (!visibleWindows.empty()) {
+        context += L"Open windows: ";
+        for (size_t i = 0; i < visibleWindows.size(); i++) {
+            if (i > 0) context += L", ";
+            context += L"\"" + filterSensitive(visibleWindows[i]) + L"\"";
+        }
+        context += L"\n";
+    }
+
+    if (context.empty()) {
+        context = L"User is at their desktop. No active window detected.";
+    }
+
+    return context;
+}
 
 // Chat history entry: user message + assistant response
 struct ChatEntry {
@@ -34,6 +236,8 @@ static std::vector<ChatEntry> g_chatHistory;
 static std::atomic<bool> g_chatInProgress(false);
 static std::wstring g_lastUserMsg;
 static std::wstring g_pendingResponse;
+static std::wstring g_streamingPartial;  // Accumulated streaming text
+static std::mutex g_streamingMutex;      // Protects g_streamingPartial (written on bg thread, read on UI thread)
 
 // Control ID for conversation display (needed by RefreshConversation)
 #define IDC_BUBBLE_CONVO 3015
@@ -41,63 +245,210 @@ static std::wstring g_pendingResponse;
 // Loading animation timer
 #define IDT_LOADING 1002
 static int g_loadingDots = 0;
+// Track where the thinking indicator starts in the Rich Edit (for in-place updates)
+static LRESULT g_thinkingStartPos = -1;
 
-// Refresh the conversation Rich Edit control with Messenger-style layout:
-// User messages right-aligned, Aria messages left-aligned, all black text.
+// Check if user is scrolled to the bottom of the Rich Edit
+static bool IsScrolledToBottom(HWND hConvo) {
+    SCROLLINFO si = {};
+    si.cbSize = sizeof(si);
+    si.fMask = SIF_ALL;
+    GetScrollInfo(hConvo, SB_VERT, &si);
+    // Allow 20px tolerance
+    return (si.nPos + (int)si.nPage >= si.nMax - 20);
+}
+
+// Refresh the conversation Rich Edit control with modern Messenger-style
+// message bubbles: user messages with blue background + white text on right,
+// Argos messages with light gray background + black text on left.
+// Only auto-scrolls if user was already at the bottom.
 static void RefreshConversation(HWND hwnd) {
     HWND hConvo = GetDlgItem(hwnd, IDC_BUBBLE_CONVO);
     if (!hConvo) return;
 
-    // Clear all text using WM_SETTEXT
+    // Check if user is at the bottom BEFORE we rebuild
+    bool wasAtBottom = IsScrolledToBottom(hConvo);
+
+    // Clear all text
     SetWindowTextW(hConvo, L"");
 
-    // Default character format: black text
-    CHARFORMAT2W cf = {};
-    cf.cbSize = sizeof(cf);
-    cf.dwMask = CFM_COLOR;
-    cf.crTextColor = RGB(0, 0, 0);
-
-    // Paragraph format for alignment
+    // Paragraph format for spacing and alignment
     PARAFORMAT2 pf = {};
     pf.cbSize = sizeof(pf);
-    pf.dwMask = PFM_ALIGNMENT;
+
+    // ── User message bubble format: blue bg, white text, right-aligned ──
+    CHARFORMAT2W cfUser = {};
+    cfUser.cbSize = sizeof(cfUser);
+    cfUser.dwMask = CFM_COLOR | CFM_BACKCOLOR | CFM_BOLD;
+    cfUser.dwEffects = CFE_BOLD;
+    cfUser.crTextColor = RGB(255, 255, 255);       // white text
+    cfUser.crBackColor = RGB(0, 120, 215);          // blue bubble
+    cfUser.bPitchAndFamily = DEFAULT_PITCH | FF_SWISS;
+
+    // ── User sender label format: small, white, right-aligned ──
+    CHARFORMAT2W cfUserLabel = {};
+    cfUserLabel.cbSize = sizeof(cfUserLabel);
+    cfUserLabel.dwMask = CFM_COLOR | CFM_BACKCOLOR | CFM_SIZE | CFM_BOLD;
+    cfUserLabel.dwEffects = CFE_BOLD;
+    cfUserLabel.crTextColor = RGB(220, 235, 250);
+    cfUserLabel.crBackColor = RGB(0, 120, 215);
+    cfUser.yHeight = 180; // 9pt
+
+    // ── Argos message bubble format: light gray bg, black text, left-aligned ──
+    CHARFORMAT2W cfArgos = {};
+    cfArgos.cbSize = sizeof(cfArgos);
+    cfArgos.dwMask = CFM_COLOR | CFM_BACKCOLOR;
+    cfArgos.crTextColor = RGB(30, 30, 30);           // near-black text
+    cfArgos.crBackColor = RGB(240, 240, 240);        // light gray bubble
+
+    // ── Argos sender label format: blue bold ──
+    CHARFORMAT2W cfArgosLabel = {};
+    cfArgosLabel.cbSize = sizeof(cfArgosLabel);
+    cfArgosLabel.dwMask = CFM_COLOR | CFM_BACKCOLOR | CFM_BOLD;
+    cfArgosLabel.dwEffects = CFE_BOLD;
+    cfArgosLabel.crTextColor = RGB(0, 120, 215);     // blue
+    cfArgosLabel.crBackColor = RGB(240, 240, 240);   // light gray
+
+    // ── Thinking format: gray italic ──
+    CHARFORMAT2W cfThink = {};
+    cfThink.cbSize = sizeof(cfThink);
+    cfThink.dwMask = CFM_COLOR | CFM_BACKCOLOR | CFM_ITALIC;
+    cfThink.dwEffects = CFE_ITALIC;
+    cfThink.crTextColor = RGB(130, 130, 130);
+    cfThink.crBackColor = RGB(240, 240, 240);
+
+    // ── Spacing format (blank line between messages) ──
+    CHARFORMAT2W cfSpacer = {};
+    cfSpacer.cbSize = sizeof(cfSpacer);
+    cfSpacer.dwMask = CFM_COLOR | CFM_BACKCOLOR;
+    cfSpacer.crTextColor = RGB(255, 255, 255);
+    cfSpacer.crBackColor = RGB(255, 255, 255);
 
     for (const auto& entry : g_chatHistory) {
-        // User message — right aligned (like Messenger)
+        // ── User message bubble (right-aligned, blue) ──
+        pf.dwMask = PFM_ALIGNMENT | PFM_SPACEBEFORE | PFM_SPACEAFTER | PFM_OFFSET;
         pf.wAlignment = PFA_RIGHT;
+        pf.dySpaceBefore = 120;  // 6px gap above
+        pf.dySpaceAfter = 0;
+        pf.dxOffset = 0;
+        pf.dxStartIndent = 0;
         SendMessageW(hConvo, EM_SETPARAFORMAT, 0, (LPARAM)&pf);
-        SendMessageW(hConvo, EM_SETCHARFORMAT, SCF_SELECTION, (LPARAM)&cf);
+
+        // User sender label
+        SendMessageW(hConvo, EM_SETCHARFORMAT, SCF_SELECTION, (LPARAM)&cfUserLabel);
+        SendMessageW(hConvo, EM_REPLACESEL, FALSE, (LPARAM)L"You\r\n");
+
+        // User message body
+        SendMessageW(hConvo, EM_SETCHARFORMAT, SCF_SELECTION, (LPARAM)&cfUser);
         std::wstring userLine = entry.userMsg + L"\r\n";
         SendMessageW(hConvo, EM_REPLACESEL, FALSE, (LPARAM)userLine.c_str());
 
-        // Aria response — left aligned with "Aria:" prefix
+        // ── Argos response bubble (left-aligned, gray) ──
         if (!entry.assistantMsg.empty()) {
             pf.wAlignment = PFA_LEFT;
+            pf.dySpaceBefore = 120;  // 6px gap
+            pf.dySpaceAfter = 0;
             SendMessageW(hConvo, EM_SETPARAFORMAT, 0, (LPARAM)&pf);
-            SendMessageW(hConvo, EM_SETCHARFORMAT, SCF_SELECTION, (LPARAM)&cf);
-            std::wstring ariaLine = L"Aria: " + entry.assistantMsg + L"\r\n";
-            SendMessageW(hConvo, EM_REPLACESEL, FALSE, (LPARAM)ariaLine.c_str());
+
+            // Argos sender label
+            SendMessageW(hConvo, EM_SETCHARFORMAT, SCF_SELECTION, (LPARAM)&cfArgosLabel);
+            SendMessageW(hConvo, EM_REPLACESEL, FALSE, (LPARAM)L"Argos\r\n");
+
+            // Argos message body
+            SendMessageW(hConvo, EM_SETCHARFORMAT, SCF_SELECTION, (LPARAM)&cfArgos);
+            std::wstring argosLine = entry.assistantMsg + L"\r\n";
+            SendMessageW(hConvo, EM_REPLACESEL, FALSE, (LPARAM)argosLine.c_str());
         }
-
-        // Blank line separator
-        SendMessageW(hConvo, EM_REPLACESEL, FALSE, (LPARAM)L"\r\n");
     }
 
-    // Loading indicator — always show when chat in progress
+    // ── Thinking indicator bubble (left-aligned, gray, animated) ──
     if (g_chatInProgress.load()) {
+        // Record position where thinking indicator starts — BEFORE adding it
+        g_thinkingStartPos = SendMessageW(hConvo, WM_GETTEXTLENGTH, 0, 0);
+
         pf.wAlignment = PFA_LEFT;
+        pf.dySpaceBefore = 120;
+        pf.dySpaceAfter = 0;
         SendMessageW(hConvo, EM_SETPARAFORMAT, 0, (LPARAM)&pf);
-        SendMessageW(hConvo, EM_SETCHARFORMAT, SCF_SELECTION, (LPARAM)&cf);
-        std::wstring loading = L"Aria: Thinking";
-        for (int i = 0; i < g_loadingDots; i++) loading += L".";
-        loading += L"\r\n";
-        SendMessageW(hConvo, EM_REPLACESEL, FALSE, (LPARAM)loading.c_str());
+
+        // "Argos" label
+        SendMessageW(hConvo, EM_SETCHARFORMAT, SCF_SELECTION, (LPARAM)&cfArgosLabel);
+        SendMessageW(hConvo, EM_REPLACESEL, FALSE, (LPARAM)L"Argos\r\n");
+
+        // Animated thinking text
+        SendMessageW(hConvo, EM_SETCHARFORMAT, SCF_SELECTION, (LPARAM)&cfThink);
+        const wchar_t* dots[] = { L"○ ○ ○", L"● ○ ○", L"○ ● ○", L"○ ○ ●" };
+        std::wstring thinking = L"Thinking " + std::wstring(dots[g_loadingDots % 4]) + L"\r\n";
+        SendMessageW(hConvo, EM_REPLACESEL, FALSE, (LPARAM)thinking.c_str());
     }
 
-    // Scroll to bottom — move cursor to end and scroll into view
+    // Only auto-scroll if user was already at the bottom
+    if (wasAtBottom) {
+        LRESULT textLen = SendMessageW(hConvo, WM_GETTEXTLENGTH, 0, 0);
+        SendMessageW(hConvo, EM_SETSEL, textLen, textLen);
+        SendMessageW(hConvo, EM_SCROLLCARET, 0, 0);
+    }
+}
+
+// Update only the thinking dots without rebuilding the entire conversation.
+// This preserves scroll position when the user is reading history.
+static void UpdateThinkingDots(HWND hwnd) {
+    HWND hConvo = GetDlgItem(hwnd, IDC_BUBBLE_CONVO);
+    if (!hConvo) return;
+    if (!g_chatInProgress.load()) return;
+    if (g_thinkingStartPos < 0) return; // not initialized yet
+
+    // Check if user is at the bottom
+    bool wasAtBottom = IsScrolledToBottom(hConvo);
+
     LRESULT textLen = SendMessageW(hConvo, WM_GETTEXTLENGTH, 0, 0);
-    SendMessageW(hConvo, EM_SETSEL, textLen, textLen);
-    SendMessageW(hConvo, EM_SCROLLCARET, 0, 0);
+
+    // Select from thinking start to end and delete it
+    SendMessageW(hConvo, EM_SETSEL, g_thinkingStartPos, textLen);
+    SendMessageW(hConvo, EM_REPLACESEL, FALSE, (LPARAM)L"");
+
+    // Now insert new thinking indicator at the same position
+    // Set cursor to thinking start
+    SendMessageW(hConvo, EM_SETSEL, g_thinkingStartPos, g_thinkingStartPos);
+
+    // Paragraph format
+    PARAFORMAT2 pf = {};
+    pf.cbSize = sizeof(pf);
+    pf.dwMask = PFM_ALIGNMENT | PFM_SPACEBEFORE | PFM_SPACEAFTER;
+    pf.wAlignment = PFA_LEFT;
+    pf.dySpaceBefore = 120;
+    pf.dySpaceAfter = 0;
+    SendMessageW(hConvo, EM_SETPARAFORMAT, 0, (LPARAM)&pf);
+
+    // "Argos" label: blue bold on gray
+    CHARFORMAT2W cfLabel = {};
+    cfLabel.cbSize = sizeof(cfLabel);
+    cfLabel.dwMask = CFM_COLOR | CFM_BACKCOLOR | CFM_BOLD;
+    cfLabel.dwEffects = CFE_BOLD;
+    cfLabel.crTextColor = RGB(0, 120, 215);
+    cfLabel.crBackColor = RGB(240, 240, 240);
+    SendMessageW(hConvo, EM_SETCHARFORMAT, SCF_SELECTION, (LPARAM)&cfLabel);
+    SendMessageW(hConvo, EM_REPLACESEL, FALSE, (LPARAM)L"Argos\r\n");
+
+    // Thinking text: gray italic on gray
+    CHARFORMAT2W cfThink = {};
+    cfThink.cbSize = sizeof(cfThink);
+    cfThink.dwMask = CFM_COLOR | CFM_BACKCOLOR | CFM_ITALIC;
+    cfThink.dwEffects = CFE_ITALIC;
+    cfThink.crTextColor = RGB(130, 130, 130);
+    cfThink.crBackColor = RGB(240, 240, 240);
+    SendMessageW(hConvo, EM_SETCHARFORMAT, SCF_SELECTION, (LPARAM)&cfThink);
+
+    const wchar_t* dots[] = { L"○ ○ ○", L"● ○ ○", L"○ ● ○", L"○ ○ ●" };
+    std::wstring thinkText = L"Thinking " + std::wstring(dots[g_loadingDots % 4]) + L"\r\n";
+    SendMessageW(hConvo, EM_REPLACESEL, FALSE, (LPARAM)thinkText.c_str());
+
+    // Auto-scroll only if user was at bottom
+    if (wasAtBottom) {
+        LRESULT endLen = SendMessageW(hConvo, WM_GETTEXTLENGTH, 0, 0);
+        SendMessageW(hConvo, EM_SETSEL, endLen, endLen);
+        SendMessageW(hConvo, EM_SCROLLCARET, 0, 0);
+    }
 }
 
 // Global handles
@@ -171,6 +522,11 @@ static NeonButton g_btnData[] = {
 
 static LRESULT CALLBACK BubbleWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
+// Forward declarations for proactive system
+static void StartProactiveTimer(HWND hwnd);
+static void StopProactiveTimer(HWND hwnd);
+static void CloseProactiveBubble();
+
 // Subclass proc for input edit control — Enter key sends message
 static WNDPROC g_origEditProc = nullptr;
 static LRESULT CALLBACK InputEditProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
@@ -204,25 +560,31 @@ static LRESULT CALLBACK BubbleWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             g_bubbleEditBgBrush = CreateSolidBrush(RGB(250, 253, 255));
 
             // Title label — neon blue text
-            HWND hTitle = CreateWindowExW(0, L"STATIC", L"Ask Aria",
+            HWND hTitle = CreateWindowExW(0, L"STATIC", L"Ask Argos",
                 WS_CHILD | WS_VISIBLE | SS_CENTER,
                 28, 12, 284, 22, hwnd, (HMENU)IDC_BUBBLE_TITLE, nullptr, nullptr);
             SendMessageW(hTitle, WM_SETFONT, (WPARAM)g_bubbleTitleFont, TRUE);
 
-            // Conversation display — Rich Edit for Messenger-style alignment
+            // Conversation display — Rich Edit for modern Messenger-style bubbles
             // Load rich edit library if not already loaded
             if (!g_richEditDll) g_richEditDll = LoadLibraryW(L"msftedit.dll");
-            HWND hConvo = CreateWindowExW(0, L"RICHEDIT50W", L"",
-                WS_CHILD | WS_VISIBLE | ES_MULTILINE | ES_READONLY | WS_VSCROLL,
+            HWND hConvo = CreateWindowExW(WS_EX_TRANSPARENT, L"RICHEDIT50W", L"",
+                WS_CHILD | WS_VISIBLE | ES_MULTILINE | ES_READONLY | WS_VSCROLL | ES_AUTOVSCROLL,
                 28, 38, 284, 120, hwnd, (HMENU)IDC_BUBBLE_CONVO, nullptr, nullptr);
             SendMessageW(hConvo, WM_SETFONT, (WPARAM)g_bubbleFont, TRUE);
-            // White background, black text
+            // White background
             SendMessageW(hConvo, EM_SETBKGNDCOLOR, 0, (LPARAM)RGB(255, 255, 255));
+            // Disable auto-url detection to prevent blue links cluttering
+            SendMessageW(hConvo, EM_AUTOURLDETECT, FALSE, 0);
+            // Set default format: black text on white
             CHARFORMAT2W cf = {};
             cf.cbSize = sizeof(cf);
-            cf.dwMask = CFM_COLOR;
+            cf.dwMask = CFM_COLOR | CFM_BACKCOLOR;
             cf.crTextColor = RGB(0, 0, 0);
+            cf.crBackColor = RGB(255, 255, 255);
             SendMessageW(hConvo, EM_SETCHARFORMAT, SCF_DEFAULT, (LPARAM)&cf);
+            // Set event mask to include EN_CHANGE so we can track scrolling
+            SendMessageW(hConvo, EM_SETEVENTMASK, 0, ENM_SCROLL | ENM_CHANGE);
 
             // Input box — small, flat modern style, for typing new messages
             HWND hEdit = CreateWindowExW(0, L"EDIT", L"",
@@ -504,7 +866,8 @@ static LRESULT CALLBACK BubbleWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
                         // Clear input box
                         SetWindowTextW(GetDlgItem(hwnd, IDC_BUBBLE_EDIT), L"");
                         EnableWindow(GetDlgItem(hwnd, IDC_BUBBLE_SEND), FALSE);
-                        SetTimer(hwnd, IDT_LOADING, 400, nullptr);
+                        SetTimer(hwnd, IDT_LOADING, 300, nullptr);
+                        g_thinkingStartPos = -1; // reset for new thinking indicator
 
                         // Set robot to thinking state
                         if (g_renderer) g_renderer->SetThinking(true);
@@ -512,9 +875,21 @@ static LRESULT CALLBACK BubbleWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
                         // Update conversation display with user message + loading
                         RefreshConversation(hwnd);
 
-                        // Launch async chat thread
+                        // Launch async chat thread with streaming
                         std::thread([hwnd]() {
-                            g_pendingResponse = g_agent->Chat(g_lastUserMsg);
+                            {
+                                std::lock_guard<std::mutex> lock(g_streamingMutex);
+                                g_streamingPartial.clear();
+                            }
+                            g_pendingResponse = g_agent->ChatStreaming(g_lastUserMsg,
+                                [hwnd](const std::wstring& delta) -> bool {
+                                    {
+                                        std::lock_guard<std::mutex> lock(g_streamingMutex);
+                                        g_streamingPartial += delta;
+                                    }
+                                    PostMessageW(hwnd, WM_CHAT_STREAM, 0, 0);
+                                    return true; // continue streaming
+                                });
                             PostMessageW(hwnd, WM_CHAT_RESPONSE, 0, 0);
                         }).detach();
                     }
@@ -591,7 +966,7 @@ static LRESULT CALLBACK BubbleWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
                     DestroyWindow(hwnd);
                     return 0;
                 case IDC_BUBBLE_VOICE:
-                    MessageBoxW(hwnd, L"Voice input coming soon!", L"Aria", MB_OK | MB_ICONINFORMATION);
+                    MessageBoxW(hwnd, L"Voice input coming soon!", L"Argos", MB_OK | MB_ICONINFORMATION);
                     return 0;
             }
             break;
@@ -599,10 +974,32 @@ static LRESULT CALLBACK BubbleWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
         case WM_TIMER: {
             if (wParam == IDT_LOADING) {
                 g_loadingDots = (g_loadingDots + 1) % 4;
-                RefreshConversation(hwnd);
+                // Only update the thinking dots, NOT rebuild the whole conversation
+                // This preserves scroll position when user is reading history
+                UpdateThinkingDots(hwnd);
                 return 0;
             }
             break;
+        }
+        case WM_CHAT_STREAM: {
+            // Safely copy the streaming text under lock to avoid data races
+            std::wstring streamedTextCopy;
+            {
+                std::lock_guard<std::mutex> lock(g_streamingMutex);
+                streamedTextCopy = g_streamingPartial;
+            }
+            // Update the last history entry with streaming partial response
+            if (!g_chatHistory.empty()) {
+                g_chatHistory.back().assistantMsg = streamedTextCopy;
+            }
+            // Stop the thinking dots timer — we have real text now
+            if (!streamedTextCopy.empty()) {
+                KillTimer(hwnd, IDT_LOADING);
+                if (g_renderer) g_renderer->SetThinking(false);
+            }
+            // Refresh conversation to show streaming text
+            RefreshConversation(hwnd);
+            return 0;
         }
         case WM_CHAT_RESPONSE: {
             KillTimer(hwnd, IDT_LOADING);
@@ -650,9 +1047,233 @@ static LRESULT CALLBACK BubbleWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             g_bubbleHwnd = nullptr;
             g_settingsVisible = false;
             g_expanded = false;
+            // Resume proactive Argos when chat closes
+            if (g_windowMgr && g_windowMgr->GetHwnd()) {
+                StartProactiveTimer(g_windowMgr->GetHwnd());
+            }
             return 0;
     }
     return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
+// ── Proactive speech bubble — small popup showing Argos's spontaneous messages ──
+static LRESULT CALLBACK ProactiveBubbleProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    switch (msg) {
+        case WM_ERASEBKGND:
+            return 1;
+        case WM_PAINT: {
+            PAINTSTRUCT ps;
+            HDC hdc = BeginPaint(hwnd, &ps);
+            RECT rc;
+            GetClientRect(hwnd, &rc);
+            int w = rc.right, h = rc.bottom;
+
+            // Double-buffer
+            HDC memDC = CreateCompatibleDC(hdc);
+            HBITMAP memBmp = CreateCompatibleBitmap(hdc, w, h);
+            HBITMAP oldBmp = (HBITMAP)SelectObject(memDC, memBmp);
+
+            // Magenta background (transparent via color key)
+            HBRUSH magBrush = CreateSolidBrush(RGB(255, 0, 255));
+            FillRect(memDC, &rc, magBrush);
+            DeleteObject(magBrush);
+
+            // Bubble geometry — reserve space at bottom for tail
+            int tailH = 22;
+            int bL = 8, bT = 8, bR = w - 8, bB = h - tailH - 4;
+            int radius = 18;
+            int tailX = w / 2;
+            int tailW = 12;
+
+            HPEN nullPen = (HPEN)GetStockObject(NULL_PEN);
+            HBRUSH whiteBrush = CreateSolidBrush(RGB(255, 255, 255));
+            HBRUSH glowBrush = CreateSolidBrush(NEON_BLUE_GLOW);
+            HBRUSH dimGlowBrush = CreateSolidBrush(NEON_BLUE_DIM);
+
+            // Glow halo
+            SelectObject(memDC, nullPen);
+            SelectObject(memDC, glowBrush);
+            RoundRect(memDC, bL - 5, bT - 5, bR + 5, bB + 5, (radius + 5) * 2, (radius + 5) * 2);
+            SelectObject(memDC, dimGlowBrush);
+            RoundRect(memDC, bL - 2, bT - 2, bR + 2, bB + 2, (radius + 2) * 2, (radius + 2) * 2);
+
+            // Tail fill
+            SelectObject(memDC, nullPen);
+            SelectObject(memDC, whiteBrush);
+            POINT tail[] = {
+                {tailX - tailW, bB - 2},
+                {tailX + tailW, bB - 2},
+                {tailX, bB + tailH}
+            };
+            Polygon(memDC, tail, 3);
+
+            // White bubble body
+            RoundRect(memDC, bL, bT, bR, bB, radius * 2, radius * 2);
+
+            // Neon header bar
+            HBRUSH barBrush = CreateSolidBrush(NEON_BLUE_BAR);
+            SelectObject(memDC, nullPen);
+            SelectObject(memDC, barBrush);
+            RoundRect(memDC, bL + 1, bT + 1, bR - 1, bT + 6, radius * 2, radius * 2);
+            DeleteObject(barBrush);
+
+            // Neon outline
+            HPEN neonPen = CreatePen(PS_SOLID, 2, NEON_BLUE);
+            SelectObject(memDC, neonPen);
+            SelectObject(memDC, GetStockObject(NULL_BRUSH));
+            RoundRect(memDC, bL, bT, bR, bB, radius * 2, radius * 2);
+
+            // Erase bottom outline where tail connects
+            SelectObject(memDC, nullPen);
+            SelectObject(memDC, whiteBrush);
+            RECT eraseRect = {tailX - tailW, bB - 2, tailX + tailW, bB + 2};
+            FillRect(memDC, &eraseRect, whiteBrush);
+
+            // Tail outline
+            SelectObject(memDC, neonPen);
+            SelectObject(memDC, GetStockObject(NULL_BRUSH));
+            MoveToEx(memDC, tailX - tailW, bB, nullptr);
+            LineTo(memDC, tailX, bB + tailH);
+            LineTo(memDC, tailX + tailW, bB);
+
+            // Draw the message text — LARGE font for readability
+            HFONT msgFont = CreateFontW(22, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
+            HFONT oldFont = (HFONT)SelectObject(memDC, msgFont);
+            SetBkMode(memDC, TRANSPARENT);
+
+            // "Argos says:" label in neon blue (larger)
+            HFONT labelFont = CreateFontW(16, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+                DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
+            SelectObject(memDC, labelFont);
+            SetTextColor(memDC, TEXT_NEON);
+            RECT labelRect = {bL + 14, bT + 10, bR - 14, bT + 32};
+            DrawTextW(memDC, L"Argos says:", -1, &labelRect, DT_LEFT | DT_SINGLELINE);
+
+            // Message body — large black text, fills remaining bubble space
+            SelectObject(memDC, msgFont);
+            SetTextColor(memDC, RGB(0, 0, 0));
+            RECT textRect = {bL + 14, bT + 36, bR - 14, bB - 8};
+            DrawTextW(memDC, g_proactiveMsg.c_str(), (int)g_proactiveMsg.size(),
+                     &textRect, DT_LEFT | DT_WORDBREAK | DT_TOP);
+
+            DeleteObject(SelectObject(memDC, oldFont));
+            DeleteObject(labelFont);
+            DeleteObject(neonPen);
+            DeleteObject(whiteBrush);
+            DeleteObject(glowBrush);
+            DeleteObject(dimGlowBrush);
+
+            BitBlt(hdc, 0, 0, w, h, memDC, 0, 0, SRCCOPY);
+            SelectObject(memDC, oldBmp);
+            DeleteObject(memBmp);
+            DeleteDC(memDC);
+
+            EndPaint(hwnd, &ps);
+            return 0;
+        }
+        case WM_LBUTTONDOWN:
+        case WM_RBUTTONDOWN:
+            // Click anywhere to dismiss
+            DestroyWindow(hwnd);
+            return 0;
+        case WM_TIMER:
+            if (wParam == IDT_PROACTIVE_BUBBLE_TIMEOUT) {
+                DestroyWindow(hwnd);
+                return 0;
+            }
+            break;
+        case WM_DESTROY:
+            g_proactiveBubble = nullptr;
+            KillTimer(hwnd, IDT_PROACTIVE_BUBBLE_TIMEOUT);
+            // Restart proactive timer: 10 seconds AFTER bubble disappears
+            if (g_proactiveActive && !g_bubbleHwnd && g_windowMgr && g_windowMgr->GetHwnd()) {
+                StartProactiveTimer(g_windowMgr->GetHwnd());
+            }
+            return 0;
+    }
+    return DefWindowProcW(hwnd, msg, wParam, lParam);
+}
+
+static void ShowProactiveBubble(HWND robotHwnd, const std::wstring& message) {
+    if (g_proactiveBubble) {
+        // Update existing bubble
+        g_proactiveMsg = message;
+        InvalidateRect(g_proactiveBubble, nullptr, TRUE);
+        // Recalculate dismiss time based on new message word count
+        int wordCount = 1;
+        for (wchar_t c : message) if (c == L' ' || c == L'\n') wordCount++;
+        int dismissMs = (std::max)(6, wordCount * 2) * 1000;
+        SetTimer(g_proactiveBubble, IDT_PROACTIVE_BUBBLE_TIMEOUT, dismissMs, nullptr);
+        return;
+    }
+
+    g_proactiveMsg = message;
+
+    static bool registered = false;
+    if (!registered) {
+        WNDCLASSW wc = {};
+        wc.lpfnWndProc = ProactiveBubbleProc;
+        wc.hInstance = GetModuleHandleW(nullptr);
+        wc.lpszClassName = L"ArgosProactiveBubble";
+        wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
+        wc.hbrBackground = nullptr;
+        RegisterClassW(&wc);
+        registered = true;
+    }
+
+    // Calculate bubble size based on message length — LARGER for readability
+    int msgLen = (int)message.size();
+    int bubbleW = 380;
+    int bubbleH = 140;  // Minimum: 8 top + 32 label + 60 text + 22 tail + 18 padding
+    if (msgLen > 60)  { bubbleW = 420; bubbleH = 170; }
+    if (msgLen > 120) { bubbleW = 460; bubbleH = 200; }
+    if (msgLen > 200) { bubbleW = 500; bubbleH = 240; }
+
+    // Position above the robot
+    RECT rc;
+    GetWindowRect(robotHwnd, &rc);
+    int x = rc.left + (rc.right - rc.left) / 2 - bubbleW / 2;
+    int y = rc.top - bubbleH + 10;
+    if (y < 0) y = rc.bottom + 10;
+
+    g_proactiveBubble = CreateWindowExW(
+        WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
+        L"ArgosProactiveBubble", L"",
+        WS_POPUP,
+        x, y, bubbleW, bubbleH,
+        nullptr, nullptr, GetModuleHandleW(nullptr), nullptr);
+
+    SetLayeredWindowAttributes(g_proactiveBubble, RGB(255, 0, 255), 255, LWA_COLORKEY);
+    ShowWindow(g_proactiveBubble, SW_SHOWNOACTIVATE);
+    UpdateWindow(g_proactiveBubble);
+
+    // Auto-dismiss: 2 seconds per word in the message (minimum 6 seconds)
+    int wordCount = 1;
+    for (wchar_t c : message) if (c == L' ' || c == L'\n') wordCount++;
+    int dismissMs = (std::max)(6, wordCount * 2) * 1000;
+    SetTimer(g_proactiveBubble, IDT_PROACTIVE_BUBBLE_TIMEOUT, dismissMs, nullptr);
+}
+
+static void CloseProactiveBubble() {
+    if (g_proactiveBubble) {
+        DestroyWindow(g_proactiveBubble);
+        g_proactiveBubble = nullptr;
+    }
+}
+
+static void StartProactiveTimer(HWND hwnd) {
+    if (!g_proactiveActive) return;
+    int interval = GetRandomProactiveInterval();
+    SetTimer(hwnd, IDT_PROACTIVE, interval, nullptr);
+}
+
+static void StopProactiveTimer(HWND hwnd) {
+    KillTimer(hwnd, IDT_PROACTIVE);
+    g_proactiveBusy = false;
+    CloseProactiveBubble();
 }
 
 static void UpdateBubblePosition(HWND robotHwnd) {
@@ -679,7 +1300,7 @@ static void ShowMangaBubble(HINSTANCE hInstance, HWND parent) {
         WNDCLASSW wc = {};
         wc.lpfnWndProc = BubbleWndProc;
         wc.hInstance = hInstance;
-        wc.lpszClassName = L"AriaMangaBubble";
+        wc.lpszClassName = L"ArgosMangaBubble";
         wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
         wc.hbrBackground = nullptr;
         RegisterClassW(&wc);
@@ -696,7 +1317,7 @@ static void ShowMangaBubble(HINSTANCE hInstance, HWND parent) {
 
     g_bubbleHwnd = CreateWindowExW(
         WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
-        L"AriaMangaBubble", L"",
+        L"ArgosMangaBubble", L"",
         WS_POPUP,
         x, y, bubbleW, bubbleH,
         nullptr, nullptr, hInstance, nullptr);
@@ -718,6 +1339,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 return -1;
             }
             SetTimer(hwnd, IDT_ANIMATE, ANIMATE_INTERVAL_MS, nullptr);
+            // Start proactive Argos — first message after 5 seconds
+            SetTimer(hwnd, IDT_PROACTIVE, 5000, nullptr);
             return 0;
         }
 
@@ -729,12 +1352,86 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 // Keep manga bubble positioned above the robot
                 UpdateBubblePosition(hwnd);
 
+                // Keep proactive bubble positioned above robot too
+                if (g_proactiveBubble) {
+                    RECT rc; GetWindowRect(hwnd, &rc);
+                    RECT brc; GetWindowRect(g_proactiveBubble, &brc);
+                    int bw = brc.right - brc.left, bh = brc.bottom - brc.top;
+                    int x = rc.left + (rc.right - rc.left) / 2 - bw / 2;
+                    int y = rc.top - bh + 10;
+                    if (y < 0) y = rc.bottom + 10;
+                    SetWindowPos(g_proactiveBubble, HWND_TOPMOST, x, y, 0, 0,
+                                 SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+                }
+
                 // Check if head was clicked → show input dialog
                 if (g_renderer->WantsInputDialog()) {
                     g_renderer->ClearInputDialogFlag();
+                    // Stop proactive when chat opens
+                    StopProactiveTimer(hwnd);
                     ShowMangaBubble((HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), hwnd);
                 }
             }
+            else if (wParam == IDT_PROACTIVE) {
+                // Proactive check-in: gather screen context and ask AI for a message
+                if (!g_proactiveBusy && !g_bubbleHwnd && g_proactiveActive) {
+                    g_proactiveBusy = true;
+                    // Kill this timer; we'll restart with new random interval after response
+                    KillTimer(hwnd, IDT_PROACTIVE);
+
+                    // Gather screen context on background thread, then call AI
+                    std::thread([hwnd]() {
+                        try {
+                            // Gather screen context with privacy filtering
+                            std::wstring wCtx = GatherScreenContext();
+
+                            // Add personality variety hint
+                            std::wstring hint = GetRandomPersonalityHint();
+                            std::wstring fullCtx = wCtx + L"\n\nPersonality direction: " + hint;
+
+                            // Call AI for a proactive message
+                            std::wstring response = g_agent->ProactiveChat(fullCtx);
+
+                            // If AI returned empty or error, use a conversational fallback
+                            if (response.empty()) {
+                                static const wchar_t* fallbacks[] = {
+                                    L"Hey! What are you up to? 👀",
+                                    L"Just checking in — how's it going?",
+                                    L"You've been quiet for a bit. Everything good?",
+                                    L"Hey, I'm here! Need anything?",
+                                    L"Still keeping watch. You're doing great! 😊",
+                                };
+                                static std::mt19937 fb_rng(std::random_device{}());
+                                std::uniform_int_distribution<int> fb_dist(0, 4);
+                                response = fallbacks[fb_dist(fb_rng)];
+                            }
+
+                            g_proactiveMsg = response;
+                            PostMessageW(hwnd, WM_PROACTIVE_RESPONSE, 0, 0);
+                        } catch (...) {
+                            // Silently ignore proactive errors — don't crash the app
+                            g_proactiveBusy = false;
+                            if (g_windowMgr && g_windowMgr->GetHwnd()) {
+                                StartProactiveTimer(g_windowMgr->GetHwnd());
+                            }
+                        }
+                    }).detach();
+                }
+                return 0;
+            }
+            return 0;
+        }
+
+        case WM_PROACTIVE_RESPONSE: {
+            g_proactiveBusy = false;
+
+            // Show the proactive bubble with Argos's message
+            // Show it even if it's an error — so user sees something is happening
+            if (!g_proactiveMsg.empty() && !g_bubbleHwnd) {
+                ShowProactiveBubble(hwnd, g_proactiveMsg);
+            }
+            // Timer restarts when bubble is destroyed (WM_DESTROY in ProactiveBubbleProc)
+            // This ensures 10 seconds starts AFTER the bubble disappears
             return 0;
         }
 
@@ -789,6 +1486,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 
         case WM_DESTROY: {
             KillTimer(hwnd, IDT_ANIMATE);
+            KillTimer(hwnd, IDT_PROACTIVE);
+            CloseProactiveBubble();
             if (g_renderer) { delete g_renderer; g_renderer = nullptr; }
             PostQuitMessage(0);
             return 0;
@@ -821,7 +1520,9 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
     // AMD Radeon Developer API (OpenAI-compatible)
     g_agent->SetServerUrl(L"https://developer.amd.com.cn/radeon/api/v1");
     g_agent->SetApiKey(L"rc-c042ad0acc56669f7b46e70f924189b5ac51664ce329f5b2");
-    g_agent->SetModel(L"Qwen3.6-35B-A3B");
+    g_agent->SetModel(L"DeepSeek-V4-Flash");           // Primary: fast, cheap
+    g_agent->SetFallbackModel(L"MiniCPM5-1B");          // Fallback: if primary fails
+    g_agent->SetVisionModel(L"Qwen3.6-35B-A3B");        // Vision: OCR/screen analysis only
 
     g_windowMgr->Show();
 

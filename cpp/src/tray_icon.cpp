@@ -18,8 +18,8 @@ void TrayIcon::Initialize(HINSTANCE hInstance, HWND hwnd) {
 
     // Create context menu
     m_menu = CreatePopupMenu();
-    AppendMenuW(m_menu, MF_STRING, ID_TRAY_SHOW, L"Show Aria");
-    AppendMenuW(m_menu, MF_STRING, ID_TRAY_HIDE, L"Hide Aria");
+    AppendMenuW(m_menu, MF_STRING, ID_TRAY_SHOW, L"Show Argos");
+    AppendMenuW(m_menu, MF_STRING, ID_TRAY_HIDE, L"Hide Argos");
     AppendMenuW(m_menu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(m_menu, MF_STRING, ID_TRAY_QUIT, L"Quit");
 
@@ -30,7 +30,7 @@ void TrayIcon::Initialize(HINSTANCE hInstance, HWND hwnd) {
     m_nid.uFlags = NIF_ICON | NIF_MESSAGE | NIF_TIP;
     m_nid.uCallbackMessage = WM_TRAYICON;
     m_nid.hIcon = LoadIcon(nullptr, IDI_APPLICATION); // default icon for now
-    wcscpy_s(m_nid.szTip, L"Aria — AMD Radeon AI Companion");
+    wcscpy_s(m_nid.szTip, L"Argos — Faithful AI Companion");
 
     Shell_NotifyIconW(NIM_ADD, &m_nid);
 }

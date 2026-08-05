@@ -74,6 +74,18 @@ private:
     ComPtr<ID2D1SolidColorBrush> m_brushGlow;        // hover glow
     ComPtr<ID2D1SolidColorBrush> m_brushSpark;       // eye spark (always white)
     ComPtr<ID2D1SolidColorBrush> m_brushOutline;     // dark outline for bright backgrounds
+    ComPtr<ID2D1SolidColorBrush> m_brushCape;        // yellow cape
+    ComPtr<ID2D1SolidColorBrush> m_brushCapeShade;   // cape shadow
+    ComPtr<ID2D1SolidColorBrush> m_brushCrest;       // Spartan crest (yellow-gold)
+    ComPtr<ID2D1SolidColorBrush> m_brushPink;        // neon pink eyes
+    ComPtr<ID2D1SolidColorBrush> m_brushPinkBright;  // brighter pink
+    ComPtr<ID2D1SolidColorBrush> m_brushElectric;    // electric arc between head and body
+    ComPtr<ID2D1SolidColorBrush> m_brushGreen;       // bright neon green eyes
+    ComPtr<ID2D1SolidColorBrush> m_brushGreenBright; // yellow-green eye core
+    ComPtr<ID2D1SolidColorBrush> m_brushGold;        // golden armor
+    ComPtr<ID2D1SolidColorBrush> m_brushGoldLight;   // light gold highlight
+    ComPtr<ID2D1SolidColorBrush> m_brushGoldDark;    // dark gold shade
+    ComPtr<ID2D1SolidColorBrush> m_brushGoldMid;     // mid gold
 
     // Animation
     float m_animTime = 0.0f;
@@ -138,14 +150,18 @@ private:
 
     // EVE drawing
     void DrawEggBody(float cx, float cy, float bob);
-    void DrawHead(float cx, float headY, EyeExpression expr, bool sleeping, float turnOffsetX = 0.0f);
+    void DrawHead(float cx, float headY, EyeExpression expr, bool sleeping, float turnOffsetX = 0.0f, bool showVisor = true);
     void DrawSingleEye(float ex, float ey, float halfW, float halfH, float rotationDeg);
+    void DrawSeriousEye(float ex, float ey, bool left);
     void DrawHoverGlow(float cx, float baseY);
     void DrawArm(float cx, float cy, float bob, bool left, bool waving, float waveAngle,
                  float leanDeg = 0.0f, float dislocate = 0.0f, float squashX = 1.0f);
     void DrawSpinningArms(float cx, float cy, float bob, float spinAngle);
     void DrawGroundShadow(float cx, float baseY, float w);
     void DrawPlantSymbol(float cx, float cy);
+    void DrawCape(float cx, float cy, float bob, float leanDeg);
+    void DrawSpartanCrest(float cx, float headY);
+    void DrawElectricArc(float cx, float neckY, float bodyY);
     void DrawGear(float cx, float cy, float r);
     void DrawRobot();
 };

@@ -1,0 +1,733 @@
+#include "argos_tools.h"
+#include "tools/search_engine.h"
+#include "tools/json_writer.h"
+#include "tools/browser_tool.h"
+#include "tools/screen_context.h"
+#include "tools/ui_locator.h"
+
+#include <sstream>
+#include <filesystem>
+#include <windows.h>
+#include <iomanip>
+#include <unordered_set>
+#include <algorithm>
+
+namespace argos_tools {
+
+namespace fs = std::filesystem;
+
+// ── AI Search ──
+
+std::string index_directory(const std::string& path, bool include_hidden) {
+    try {
+        auto index = aisearch::index_directory(path, include_hidden);
+        return aisearch::content_index_to_json(index);
+    } catch (const std::exception& e) {
+        return std::string("{\"error\":\"") + e.what() + "\"}";
+    }
+}
+
+std::string search_text(const std::string& path, const std::string& query, size_t top_k) {
+    try {
+        auto index = aisearch::index_directory(path, false);
+        auto results = aisearch::search_text(index, query, top_k);
+        aisearch::SearchResults sr;
+        sr.query = query;
+        sr.text_hits = results;
+        sr.total_hits = results.size();
+        return aisearch::search_results_to_json(sr);
+    } catch (const std::exception& e) {
+        return std::string("{\"error\":\"") + e.what() + "\"}";
+    }
+}
+
+std::string search_filename(const std::string& path, const std::string& pattern, size_t top_k) {
+    try {
+        auto index = aisearch::index_directory(path, false);
+        auto results = aisearch::search_by_filename(index, pattern, top_k);
+        aisearch::SearchResults sr;
+        sr.query = pattern;
+        sr.filename_hits = results;
+        sr.total_hits = results.size();
+        return aisearch::search_results_to_json(sr);
+    } catch (const std::exception& e) {
+        return std::string("{\"error\":\"") + e.what() + "\"}";
+    }
+}
+
+std::string full_map(const std::string& path, bool include_hidden) {
+    try {
+        auto index = aisearch::index_directory(path, include_hidden);
+        return aisearch::full_index_map_to_json(index);
+    } catch (const std::exception& e) {
+        return std::string("{\"error\":\"") + e.what() + "\"}";
+    }
+}
+
+std::string stats(const std::string& path, bool include_hidden) {
+    try {
+        auto index = aisearch::index_directory(path, include_hidden);
+        return aisearch::content_index_to_json(index);
+    } catch (const std::exception& e) {
+        return std::string("{\"error\":\"") + e.what() + "\"}";
+    }
+}
+
+// ── Browser Tool ──
+
+std::string browser_navigate(const std::string& url) {
+    bool ok = browsertool::navigate(url);
+    return ok ? "{\"success\":true,\"url\":\"" + url + "\"}" : "{\"success\":false}";
+}
+
+std::string browser_get_content() {
+    return browsertool::get_page_content();
+}
+
+std::string browser_get_title() {
+    return browsertool::get_page_title();
+}
+
+std::string browser_get_url() {
+    return browsertool::get_current_url();
+}
+
+std::string browser_find_elements(const std::string& text) {
+    auto elements = browsertool::find_elements_by_text(text);
+    return browsertool::elements_to_json(elements);
+}
+
+std::string browser_click(const std::string& element_id) {
+    bool ok = browsertool::click_element(element_id);
+    return ok ? "{\"success\":true}" : "{\"success\":false}";
+}
+
+std::string browser_type(const std::string& element_id, const std::string& text) {
+    bool ok = browsertool::type_text(element_id, text);
+    return ok ? "{\"success\":true}" : "{\"success\":false}";
+}
+
+std::string browser_screenshot(bool full_page) {
+    auto info = browsertool::take_screenshot(full_page);
+    return browsertool::screenshot_to_json(info);
+}
+
+std::string browser_get_links() {
+    auto links = browsertool::get_links();
+    return browsertool::elements_to_json(links);
+}
+
+std::string browser_summarize() {
+    return browsertool::summarize_page();
+}
+
+// ── Screen Context ──
+
+std::string screen_list_apps() {
+    auto apps = list_open_apps();
+    return apps_to_json(apps);
+}
+
+std::string screen_get_active_app() {
+    auto app = get_active_app();
+    return app_info_to_json(app);
+}
+
+std::string screen_capture(const std::string& output_path) {
+    auto info = capture_screen(output_path);
+    return screen_capture_to_json(info);
+}
+
+std::string screen_ocr() {
+    auto result = ocr_screen();
+    return ocr_result_to_json(result);
+}
+
+std::string screen_get_user_context() {
+    auto ctx = get_user_context();
+    return user_context_to_json(ctx);
+}
+
+std::string screen_search_content(const std::string& query) {
+    auto results = search_content(query);
+    return content_search_results_to_json(results);
+}
+
+std::string screen_app_summary() {
+    auto summary = get_app_summary();
+    return app_summary_to_json(summary);
+}
+
+// ── UI Locator ──
+
+std::string ui_list_windows() {
+    auto windows = uilocator::list_windows();
+    return uilocator::windows_to_json(windows);
+}
+
+std::string ui_get_elements(const std::string& window_id) {
+    auto elements = uilocator::get_all_elements();
+    return uilocator::elements_to_json(elements);
+}
+
+std::string ui_search_by_text(const std::string& query, const std::string& window_id) {
+    auto results = uilocator::search_by_text(query, window_id);
+    return uilocator::search_results_to_json(results);
+}
+
+std::string ui_search_clickable(const std::string& text_filter, const std::string& window_id) {
+    auto results = uilocator::search_clickable(text_filter, window_id);
+    return uilocator::search_results_to_json(results);
+}
+
+std::string ui_click_at(int x, int y) {
+    bool ok = uilocator::click_at(x, y);
+    return ok ? "{\"success\":true}" : "{\"success\":false}";
+}
+
+std::string ui_click_element(const std::string& element_id) {
+    bool ok = uilocator::click_element(element_id);
+    return ok ? "{\"success\":true}" : "{\"success\":false}";
+}
+
+std::string ui_type_text(const std::string& text) {
+    bool ok = uilocator::type_text(text);
+    return ok ? "{\"success\":true}" : "{\"success\":false}";
+}
+
+std::string ui_get_element_state(const std::string& element_id) {
+    auto state = uilocator::get_element_state(element_id);
+    return uilocator::element_to_json(uilocator::get_element(element_id));
+}
+
+std::string ui_focus_window(const std::string& window_id) {
+    bool ok = uilocator::focus_window(window_id);
+    return ok ? "{\"success\":true}" : "{\"success\":false}";
+}
+
+std::string ui_close_window(const std::string& window_id) {
+    bool ok = uilocator::close_window(window_id);
+    return ok ? "{\"success\":true}" : "{\"success\":false}";
+}
+
+std::string ui_export_map() {
+    return uilocator::export_element_map();
+}
+
+// ── RAG (Retrieval-Augmented Generation) — Modern Hybrid Pipeline ──
+//
+// Architecture (2026 production RAG standard):
+//   1. Index directory → chunk text files (512 char chunks, 64 char overlap)
+//   2. Run TF-IDF cosine similarity search (dense retrieval)
+//   3. Run BM25 search (sparse/keyword retrieval)
+//   4. Fuse results via Reciprocal Rank Fusion (RRF) — no score calibration needed
+//   5. Rerank top candidates with query-chunk term overlap scoring
+//   6. Expand snippets to parent context (hierarchical: return larger window around match)
+//   7. Prepend contextual metadata (file path, language) to each chunk (contextual chunking)
+//   8. Return clean formatted text for AI context injection
+
+namespace {
+// Reciprocal Rank Fusion (RRF) — fuses multiple ranked lists into one
+// Formula: RRF_score(d) = sum(1 / (k + rank_i(d))) for each ranked list i
+// k=60 is the standard constant from the original RRF paper
+struct RRFEntry {
+    int chunk_id;
+    double rrf_score;
+    double original_score;
+    std::string file_path;
+    std::string snippet;
+    int chunk_index;
+    size_t start_pos;
+    size_t end_pos;
+};
+
+std::vector<RRFEntry> reciprocal_rank_fusion(
+    const std::vector<aisearch::SearchHit>& dense_hits,
+    const std::vector<aisearch::SearchHit>& bm25_hits,
+    size_t top_k,
+    int k_constant = 60
+) {
+    std::unordered_map<int, RRFEntry> fused;
+
+    // Process dense (TF-IDF) results
+    for (size_t i = 0; i < dense_hits.size(); i++) {
+        int cid = dense_hits[i].chunk_index;
+        if (cid < 0) cid = static_cast<int>(i); // fallback
+        double rrf = 1.0 / (k_constant + static_cast<int>(i) + 1);
+        if (fused.find(cid) == fused.end()) {
+            fused[cid] = RRFEntry{cid, 0, dense_hits[i].score,
+                dense_hits[i].file_path, dense_hits[i].snippet,
+                dense_hits[i].chunk_index, dense_hits[i].start_pos, dense_hits[i].end_pos};
+        }
+        fused[cid].rrf_score += rrf;
+    }
+
+    // Process BM25 results
+    for (size_t i = 0; i < bm25_hits.size(); i++) {
+        int cid = bm25_hits[i].chunk_index;
+        if (cid < 0) cid = static_cast<int>(i + 1000); // avoid collision
+        double rrf = 1.0 / (k_constant + static_cast<int>(i) + 1);
+        if (fused.find(cid) == fused.end()) {
+            fused[cid] = RRFEntry{cid, 0, bm25_hits[i].score,
+                bm25_hits[i].file_path, bm25_hits[i].snippet,
+                bm25_hits[i].chunk_index, bm25_hits[i].start_pos, bm25_hits[i].end_pos};
+        }
+        fused[cid].rrf_score += rrf;
+    }
+
+    // Sort by RRF score descending
+    std::vector<RRFEntry> result;
+    result.reserve(fused.size());
+    for (auto& [id, entry] : fused) {
+        result.push_back(entry);
+    }
+    std::sort(result.begin(), result.end(),
+        [](const RRFEntry& a, const RRFEntry& b) { return a.rrf_score > b.rrf_score; });
+
+    if (result.size() > top_k * 3) result.resize(top_k * 3); // keep 3x for reranking
+    return result;
+}
+
+// Lightweight reranker: scores query-chunk relevance by term overlap
+// This simulates a cross-encoder reranker without requiring an external model
+double rerank_score(const std::string& query, const std::string& chunk_text) {
+    auto query_tokens = aisearch::tokenize(query);
+    auto chunk_tokens = aisearch::tokenize(chunk_text);
+
+    if (query_tokens.empty() || chunk_tokens.empty()) return 0.0;
+
+    std::unordered_set<std::string> query_terms;
+    for (const auto& t : query_tokens) query_terms.insert(t.text);
+
+    std::unordered_set<std::string> chunk_terms;
+    for (const auto& t : chunk_tokens) chunk_terms.insert(t.text);
+
+    // Count overlapping terms
+    int overlap = 0;
+    for (const auto& qt : query_terms) {
+        if (chunk_terms.count(qt)) overlap++;
+    }
+
+    // Jaccard-like score: overlap / union
+    size_t union_size = query_terms.size() + chunk_terms.size() - overlap;
+    if (union_size == 0) return 0.0;
+
+    double jaccard = static_cast<double>(overlap) / union_size;
+
+    // Also factor in term frequency in chunk (query term coverage)
+    double coverage = static_cast<double>(overlap) / query_terms.size();
+
+    // Weighted combination: coverage is more important than jaccard
+    return 0.6 * coverage + 0.4 * jaccard;
+}
+
+// Extract parent context (hierarchical chunking): returns a larger window
+// around the match position to give the AI more context
+std::string extract_parent_context(const std::string& file_path, size_t match_pos, size_t match_len) {
+    try {
+        std::string content = aisearch::read_file_to_string(file_path);
+        if (content.empty()) return "";
+
+        // Parent window: 800 chars before and after the match (1600 total)
+        size_t parent_start = (match_pos > 800) ? match_pos - 800 : 0;
+        size_t parent_end = (std::min)(content.size(), match_pos + match_len + 800);
+
+        std::string parent = content.substr(parent_start, parent_end - parent_start);
+
+        // Add ellipsis if truncated
+        if (parent_start > 0) parent = "...\n" + parent;
+        if (parent_end < content.size()) parent += "\n...";
+
+        // Truncate if still too long
+        if (parent.size() > 1200) parent = parent.substr(0, 1200) + "...";
+
+        return parent;
+    } catch (...) {
+        return "";
+    }
+}
+
+// Detect language from file extension for contextual chunking
+std::string detect_lang_from_path(const std::string& path) {
+    size_t dot = path.rfind('.');
+    if (dot == std::string::npos) return "text";
+    std::string ext = path.substr(dot);
+    if (ext == ".cpp" || ext == ".cc" || ext == ".cxx") return "C++";
+    if (ext == ".h" || ext == ".hpp") return "C/C++ header";
+    if (ext == ".c") return "C";
+    if (ext == ".py") return "Python";
+    if (ext == ".js" || ext == ".ts") return "JavaScript/TypeScript";
+    if (ext == ".java") return "Java";
+    if (ext == ".cs") return "C#";
+    if (ext == ".go") return "Go";
+    if (ext == ".rs") return "Rust";
+    if (ext == ".md") return "Markdown";
+    if (ext == ".json") return "JSON";
+    if (ext == ".xml") return "XML";
+    if (ext == ".html") return "HTML";
+    if (ext == ".css") return "CSS";
+    if (ext == ".txt") return "text";
+    return "text";
+}
+
+// Build contextual chunk: prepend file context to chunk text
+// (Inspired by Anthropic's Contextual Retrieval technique)
+std::string build_contextual_chunk(const std::string& file_path, const std::string& snippet) {
+    std::string lang = detect_lang_from_path(file_path);
+
+    // Extract just the filename from the path
+    std::string filename = file_path;
+    size_t slash = filename.find_last_of("\\/");
+    if (slash != std::string::npos) filename = filename.substr(slash + 1);
+
+    // Contextual prefix: situates this chunk in the document
+    std::string context = "[File: " + filename + " | Language: " + lang + "]\n";
+
+    return context + snippet;
+}
+} // anonymous namespace
+
+std::string rag_search(const std::string& query, const std::string& dir_path, size_t top_k) {
+    try {
+        // Step 1: Determine search directory
+        std::string searchPath = dir_path;
+        if (searchPath.empty()) {
+            char cwd[MAX_PATH] = {};
+            GetCurrentDirectoryA(MAX_PATH, cwd);
+            searchPath = cwd;
+        }
+
+        // Step 2: Index the directory
+        auto index = aisearch::index_directory(searchPath, false);
+
+        // Step 3: Run hybrid search — TF-IDF (dense) + BM25 (sparse) in parallel
+        size_t candidate_k = top_k * 4; // retrieve 4x candidates, rerank down
+        auto dense_hits = aisearch::search_text(index, query, candidate_k);
+        auto bm25_hits = aisearch::search_bm25(index, query, candidate_k);
+
+        // Step 4: Fuse results via Reciprocal Rank Fusion (RRF)
+        auto fused = reciprocal_rank_fusion(dense_hits, bm25_hits, top_k);
+
+        if (fused.empty()) {
+            return "No relevant files found in " + searchPath;
+        }
+
+        // Step 5: Rerank with query-chunk term overlap scoring
+        for (auto& entry : fused) {
+            double rrf = entry.rrf_score;
+            double rerank = rerank_score(query, entry.snippet);
+            // Combine: RRF rank (80%) + reranker score (20%) — gentle reranking boost
+            // Normalize RRF to 0-1 range (max RRF for rank 1 in 2 lists ≈ 2/61 ≈ 0.033)
+            double normalized_rrf = rrf / 0.066;
+            entry.rrf_score = 0.8 * normalized_rrf + 0.2 * rerank;
+        }
+
+        // Sort by combined score
+        std::sort(fused.begin(), fused.end(),
+            [](const RRFEntry& a, const RRFEntry& b) { return a.rrf_score > b.rrf_score; });
+
+        // Step 6: Build output with hierarchical context and contextual chunking
+        size_t num_results = (std::min)(fused.size(), top_k);
+        std::ostringstream oss;
+        oss << "Local knowledge retrieval (RAG) found " << num_results
+            << " relevant text passages from your project files.\n"
+            << "Retrieval method: Hybrid (TF-IDF + BM25) with RRF fusion + reranking\n\n";
+
+        for (size_t i = 0; i < num_results; i++) {
+            const auto& entry = fused[i];
+            oss << "--- Result " << (i + 1) << " ---\n";
+
+            if (!entry.file_path.empty()) {
+                oss << "File: " << entry.file_path << "\n";
+            }
+
+            // Step 6a: Contextual chunking — prepend file context
+            std::string contextual_snippet = build_contextual_chunk(entry.file_path, entry.snippet);
+
+            // Step 6b: Hierarchical chunking — expand to parent context
+            if (entry.start_pos > 0 || entry.end_pos > 0) {
+                std::string parent = extract_parent_context(
+                    entry.file_path, entry.start_pos,
+                    entry.end_pos - entry.start_pos);
+                if (!parent.empty()) {
+                    // Use parent context but keep it manageable
+                    if (parent.size() > 600) parent = parent.substr(0, 600) + "...";
+                    contextual_snippet = build_contextual_chunk(entry.file_path, parent);
+                }
+            }
+
+            // Truncate if too long
+            if (contextual_snippet.size() > 800) {
+                contextual_snippet = contextual_snippet.substr(0, 800) + "...";
+            }
+
+            oss << "Content: " << contextual_snippet << "\n";
+            oss << "Relevance: " << std::fixed << std::setprecision(4) << entry.rrf_score << "\n\n";
+        }
+
+        return oss.str();
+    } catch (const std::exception& e) {
+        return std::string("RAG search error: ") + e.what();
+    } catch (...) {
+        return "RAG search error: unknown exception";
+    }
+}
+
+// ── SQLite Persistent Memory ──
+//
+// Stores conversation history and RAG context in a SQLite database.
+// This enables cross-session memory: Argos remembers conversations across restarts.
+// The database is stored at %APPDATA%/Argos/argos_memory.db
+
+namespace {
+std::string get_memory_db_path() {
+    char appData[MAX_PATH] = {};
+    GetEnvironmentVariableA("APPDATA", appData, MAX_PATH);
+    std::string dir = std::string(appData) + "\\Argos";
+    CreateDirectoryA(dir.c_str(), nullptr);
+    return dir + "\\argos_memory.db";
+}
+
+// Minimal SQLite wrapper using sqlite3.h
+// We use a simple file-based approach since we may not have sqlite3 linked.
+// Instead, we implement a lightweight JSON-line based persistent store.
+std::string get_memory_file_path() {
+    char appData[MAX_PATH] = {};
+    GetEnvironmentVariableA("APPDATA", appData, MAX_PATH);
+    std::string dir = std::string(appData) + "\\Argos";
+    CreateDirectoryA(dir.c_str(), nullptr);
+    return dir + "\\conversation_memory.jsonl";
+}
+} // anonymous namespace
+
+bool rag_memory_init(const std::string& db_path) {
+    std::string path = db_path.empty() ? get_memory_file_path() : db_path;
+    // Ensure the directory exists
+    size_t slash = path.find_last_of("\\/");
+    if (slash != std::string::npos) {
+        CreateDirectoryA(path.substr(0, slash).c_str(), nullptr);
+    }
+    // Create empty file if it doesn't exist
+    FILE* f = fopen(path.c_str(), "a");
+    if (!f) return false;
+    fclose(f);
+    return true;
+}
+
+bool rag_memory_save_conversation(const std::string& role, const std::string& content) {
+    std::string path = get_memory_file_path();
+    FILE* f = fopen(path.c_str(), "a");
+    if (!f) return false;
+
+    // Write as JSON line: {"role":"...","content":"...","timestamp":...}
+    std::string escaped_content;
+    for (char c : content) {
+        if (c == '"') escaped_content += "\\\"";
+        else if (c == '\\') escaped_content += "\\\\";
+        else if (c == '\n') escaped_content += "\\n";
+        else if (c == '\r') escaped_content += "\\r";
+        else if (c == '\t') escaped_content += "\\t";
+        else escaped_content += c;
+    }
+
+    std::string escaped_role;
+    for (char c : role) {
+        if (c == '"') escaped_role += "\\\"";
+        else if (c == '\\') escaped_role += "\\\\";
+        else escaped_role += c;
+    }
+
+    SYSTEMTIME st;
+    GetLocalTime(&st);
+    char timestamp[32];
+    snprintf(timestamp, sizeof(timestamp), "%04d-%02d-%02d %02d:%02d:%02d",
+             st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+
+    fprintf(f, "{\"role\":\"%s\",\"content\":\"%s\",\"timestamp\":\"%s\"}\n",
+            escaped_role.c_str(), escaped_content.c_str(), timestamp);
+    fclose(f);
+    return true;
+}
+
+std::string rag_memory_load_conversation(size_t max_messages) {
+    std::string path = get_memory_file_path();
+    FILE* f = fopen(path.c_str(), "r");
+    if (!f) return "[]";
+
+    // Read all lines
+    std::vector<std::string> lines;
+    char buffer[8192];
+    while (fgets(buffer, sizeof(buffer), f)) {
+        lines.push_back(std::string(buffer));
+    }
+    fclose(f);
+
+    // Take last max_messages lines
+    size_t start = (lines.size() > max_messages) ? lines.size() - max_messages : 0;
+    std::string result = "[\n";
+    for (size_t i = start; i < lines.size(); i++) {
+        result += "  " + lines[i];
+        if (i < lines.size() - 1) result += ",";
+        result += "\n";
+    }
+    result += "]";
+    return result;
+}
+
+bool rag_memory_clear() {
+    std::string path = get_memory_file_path();
+    FILE* f = fopen(path.c_str(), "w");
+    if (!f) return false;
+    fclose(f);
+    return true;
+}
+
+// RAG with persistent memory — saves conversation to disk
+std::string rag_search_with_memory(const std::string& query, const std::string& dir_path, size_t top_k) {
+    try {
+        // Save the query to memory
+        rag_memory_save_conversation("user", query);
+
+        // Run the standard RAG search
+        std::string result = rag_search(query, dir_path, top_k);
+
+        // Save the RAG context to memory
+        if (result.find("No relevant files") == std::string::npos &&
+            result.find("RAG search error") == std::string::npos) {
+            rag_memory_save_conversation("system_rag", result);
+        }
+
+        return result;
+    } catch (...) {
+        return "RAG search error: internal exception";
+    }
+}
+
+// ── Unified Tool Dispatch ──
+
+std::string dispatch_tool(const std::string& tool_name, const std::string& args) {
+    if (tool_name == "index" || tool_name == "index_dir") {
+        return index_directory(args);
+    }
+    if (tool_name == "search_files" || tool_name == "search_text") {
+        // args format: "path|query"
+        size_t pipe = args.find('|');
+        if (pipe != std::string::npos)
+            return search_text(args.substr(0, pipe), args.substr(pipe + 1));
+        return "{\"error\":\"Usage: path|query\"}";
+    }
+    if (tool_name == "search_filename") {
+        size_t pipe = args.find('|');
+        if (pipe != std::string::npos)
+            return search_filename(args.substr(0, pipe), args.substr(pipe + 1));
+        return "{\"error\":\"Usage: path|pattern\"}";
+    }
+    if (tool_name == "full_map" || tool_name == "map") {
+        return full_map(args);
+    }
+    if (tool_name == "stats") {
+        return stats(args);
+    }
+    if (tool_name == "browser_navigate" || tool_name == "browser_open") {
+        return browser_navigate(args);
+    }
+    if (tool_name == "browser_content") {
+        return browser_get_content();
+    }
+    if (tool_name == "browser_title") {
+        return browser_get_title();
+    }
+    if (tool_name == "browser_url") {
+        return browser_get_url();
+    }
+    if (tool_name == "browser_find") {
+        return browser_find_elements(args);
+    }
+    if (tool_name == "browser_click") {
+        return browser_click(args);
+    }
+    if (tool_name == "browser_type") {
+        size_t pipe = args.find('|');
+        if (pipe != std::string::npos)
+            return browser_type(args.substr(0, pipe), args.substr(pipe + 1));
+        return "{\"error\":\"Usage: element_id|text\"}";
+    }
+    if (tool_name == "browser_screenshot") {
+        return browser_screenshot();
+    }
+    if (tool_name == "browser_links") {
+        return browser_get_links();
+    }
+    if (tool_name == "browser_summarize") {
+        return browser_summarize();
+    }
+    if (tool_name == "screen_apps") {
+        return screen_list_apps();
+    }
+    if (tool_name == "screen_active") {
+        return screen_get_active_app();
+    }
+    if (tool_name == "screen_capture") {
+        return screen_capture(args);
+    }
+    if (tool_name == "screen_ocr") {
+        return screen_ocr();
+    }
+    if (tool_name == "screen_context") {
+        return screen_get_user_context();
+    }
+    if (tool_name == "screen_search") {
+        return screen_search_content(args);
+    }
+    if (tool_name == "screen_summary") {
+        return screen_app_summary();
+    }
+    if (tool_name == "ui_windows") {
+        return ui_list_windows();
+    }
+    if (tool_name == "ui_elements") {
+        return ui_get_elements(args);
+    }
+    if (tool_name == "ui_search") {
+        return ui_search_by_text(args);
+    }
+    if (tool_name == "ui_clickable") {
+        return ui_search_clickable(args);
+    }
+    if (tool_name == "ui_click_at") {
+        size_t comma = args.find(',');
+        if (comma != std::string::npos)
+            return ui_click_at(std::stoi(args.substr(0, comma)), std::stoi(args.substr(comma + 1)));
+        return "{\"error\":\"Usage: x,y\"}";
+    }
+    if (tool_name == "ui_click") {
+        return ui_click_element(args);
+    }
+    if (tool_name == "ui_type") {
+        return ui_type_text(args);
+    }
+    if (tool_name == "ui_focus") {
+        return ui_focus_window(args);
+    }
+    if (tool_name == "ui_close") {
+        return ui_close_window(args);
+    }
+    if (tool_name == "ui_map") {
+        return ui_export_map();
+    }
+
+    if (tool_name == "rag" || tool_name == "rag_search") {
+        return rag_search_with_memory(args);
+    }
+    if (tool_name == "memory_load" || tool_name == "recall") {
+        return rag_memory_load_conversation(20);
+    }
+    if (tool_name == "memory_clear" || tool_name == "forget") {
+        bool ok = rag_memory_clear();
+        return ok ? "{\"success\":true,\"message\":\"Memory cleared\"}" : "{\"success\":false}";
+    }
+
+    return "{\"error\":\"Unknown tool: " + tool_name + "\"}";
+}
+
+} // namespace argos_tools

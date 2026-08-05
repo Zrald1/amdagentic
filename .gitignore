@@ -46,3 +46,21 @@ app.*.map.json
 
 # Local download cache (CI artifacts)
 /downloads/
+
+# ── Argos C++ project ──
+cpp/build/
+cpp/*.pdb
+cpp/*.ilk
+cpp/*.exe
+cpp/*.obj
+cpp/C++ tools for AI/
+
+# Temp/test output files (may contain API keys or transient data)
+cpp/curl_config.txt
+cpp/curl_stream_config.txt
+cpp/api_result.txt
+cpp/eval_output.txt
+cpp/test_api_body.json
+cpp/test_api_stream.json
+aria_*.txt
+imgui.ini

@@ -15,7 +15,7 @@ WindowManager::~WindowManager() {
 bool WindowManager::Create(HINSTANCE hInstance, WNDPROC wndProc) {
     m_instance = hInstance;
 
-    const wchar_t* className = L"AriaCompanionWindow";
+    const wchar_t* className = L"ArgosCompanionWindow";
 
     WNDCLASSW wc = {};
     wc.lpfnWndProc = wndProc;
@@ -41,7 +41,7 @@ bool WindowManager::Create(HINSTANCE hInstance, WNDPROC wndProc) {
     m_hwnd = CreateWindowExW(
         exStyle,
         className,
-        L"Aria",
+        L"Argos",
         style,
         0, 0, 220, 220, // initial size, repositioned below
         nullptr, nullptr, hInstance, nullptr

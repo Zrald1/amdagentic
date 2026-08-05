@@ -54,6 +54,30 @@ static void FillEveBodyPath(ID2D1Factory* factory, ID2D1RenderTarget* target,
     target->FillGeometry(geo.Get(), brush);
 }
 
+// Stroke version — draws an outline around the body path
+static void StrokeEveBodyPath(ID2D1Factory* factory, ID2D1RenderTarget* target,
+                               float cx, float centerY, float scale,
+                               float offsetX, float offsetY, ID2D1Brush* brush, float strokeWidth) {
+    ComPtr<ID2D1PathGeometry> geo;
+    factory->CreatePathGeometry(geo.GetAddressOf());
+    ComPtr<ID2D1GeometrySink> sink;
+    geo->Open(sink.GetAddressOf());
+
+    auto pt = [&](float x, float y) {
+        return D2D1::Point2F(cx + offsetX + x * scale, centerY + offsetY + y * scale);
+    };
+
+    sink->BeginFigure(pt(0, -44), D2D1_FIGURE_BEGIN_FILLED);
+    sink->AddBezier(D2D1::BezierSegment(pt(20, -44), pt(32, -34), pt(32, -16)));
+    sink->AddBezier(D2D1::BezierSegment(pt(32, 10), pt(20, 45), pt(0, 54)));
+    sink->AddBezier(D2D1::BezierSegment(pt(-20, 45), pt(-32, 10), pt(-32, -16)));
+    sink->AddBezier(D2D1::BezierSegment(pt(-32, -34), pt(-20, -44), pt(0, -44)));
+    sink->EndFigure(D2D1_FIGURE_END_CLOSED);
+    sink->Close();
+
+    target->DrawGeometry(geo.Get(), brush, strokeWidth);
+}
+
 RobotRenderer::RobotRenderer() {
     srand((unsigned)time(nullptr));
     memset(m_lastKeyState, 0, sizeof(m_lastKeyState));
@@ -94,6 +118,8 @@ bool RobotRenderer::Initialize(HWND hwnd) {
     m_target->CreateSolidColorBrush(C_PLANT,       m_brushPlant.GetAddressOf());
     m_target->CreateSolidColorBrush(C_SHADOW,      m_brushShadow.GetAddressOf());
     m_target->CreateSolidColorBrush(C_GLOW,        m_brushGlow.GetAddressOf());
+    m_target->CreateSolidColorBrush(C_WHITE_LIGHT, m_brushSpark.GetAddressOf());
+    m_target->CreateSolidColorBrush(D2D1::ColorF(0xFF222222), m_brushOutline.GetAddressOf());
 
     return true;
 }
@@ -119,6 +145,14 @@ void RobotRenderer::WalkToEdge(bool left) {
     SetState(RobotState::Walking, 999.0f);
 }
 
+void RobotRenderer::StartSpinThenWalk(bool left) {
+    m_spinWalkLeft = left;
+    m_spinTimer = 0.0f;
+    m_targetX = left ? GetScreenLeftEdge() : GetScreenRightEdge();
+    m_facingRight = !left;
+    SetState(RobotState::Spinning, m_spinDuration);
+}
+
 // ── Keyboard detection ───────────────────────────────────────────────
 
 void RobotRenderer::CheckKeyboardActivity() {
@@ -131,7 +165,7 @@ void RobotRenderer::CheckKeyboardActivity() {
         float le = GetScreenLeftEdge(), re = GetScreenRightEdge();
         float ms = le + (re - le) / 3.0f, me = le + 2.0f * (re - le) / 3.0f;
         if (m_screenX > ms && m_screenX < me) {
-            WalkToEdge(m_screenX < (le + re) / 2.0f);
+            StartSpinThenWalk(m_screenX < (le + re) / 2.0f);
             m_typingCooldown = 30.0f;
         }
     }
@@ -153,7 +187,7 @@ void RobotRenderer::CheckKeyboardActivity() {
         float le = GetScreenLeftEdge(), re = GetScreenRightEdge();
         float ms = le + (re - le) / 3.0f, me = le + 2.0f * (re - le) / 3.0f;
         if (m_screenX > ms && m_screenX < me) {
-            WalkToEdge(m_screenX < (le + re) / 2.0f);
+            StartSpinThenWalk(m_screenX < (le + re) / 2.0f);
             m_typingCooldown = 30.0f;
         }
     }
@@ -169,12 +203,21 @@ void RobotRenderer::OnMouseDown(int mouseX, int mouseY) {
     m_downY = mouseY;
     m_dragStartX = m_screenX;
     m_dragStartY = m_screenY;
+    // Store screen coords for accurate drag tracking across window moves
+    POINT pt = {mouseX, mouseY};
+    if (m_hwnd) ClientToScreen(m_hwnd, &pt);
+    m_downScreenX = pt.x;
+    m_downScreenY = pt.y;
 }
 
 void RobotRenderer::OnMouseMove(int mouseX, int mouseY) {
     if (!m_mouseDown) return;
-    float dx = (float)(mouseX - m_downX);
-    float dy = (float)(mouseY - m_downY);
+    // Use screen coordinates so drag delta stays correct even when
+    // the window itself moves during dragging.
+    POINT pt = {mouseX, mouseY};
+    if (m_hwnd) ClientToScreen(m_hwnd, &pt);
+    float dx = (float)(pt.x - m_downScreenX);
+    float dy = (float)(pt.y - m_downScreenY);
     m_holdTimer += 0.016f;
     if (!m_dragging && (m_holdTimer > 0.25f || dx * dx + dy * dy > 81.0f)) {
         m_dragging = true;
@@ -200,14 +243,15 @@ void RobotRenderer::OnMouseUp(int mouseX, int mouseY) {
         switch (region) {
             case ClickRegion::Head:
                 m_wantsInputDialog = true;
-                SetState(RobotState::Working, 999.0f);
+                // Don't lock in Working state — let robot keep moving
+                SetState(RobotState::Idle, GetIdleDuration());
                 break;
             case ClickRegion::Arms:
                 SetState(RobotState::Greeting, 2.0f);
                 break;
             case ClickRegion::Bottom: {
                 float center = (GetScreenLeftEdge() + GetScreenRightEdge()) / 2.0f;
-                WalkToEdge(m_screenX >= center);
+                StartSpinThenWalk(m_screenX >= center);
                 break;
             }
             default:
@@ -245,7 +289,7 @@ void RobotRenderer::PickNextBehavior() {
         SetState(RobotState::Greeting, 1.5f);
     } else if (roll < 0.85f) {
         m_userWalking = false;
-        WalkToEdge(rand() % 2 == 0);
+        StartSpinThenWalk(rand() % 2 == 0);
     } else {
         SetState(RobotState::Sleeping, 15.0f);
     }
@@ -295,6 +339,13 @@ void RobotRenderer::Update() {
     m_stateTimer += dt;
     if (m_typingCooldown > 0) m_typingCooldown -= dt;
 
+    // Check background brightness every ~0.5s for adaptive coloring
+    m_bgCheckTimer += dt;
+    if (m_bgCheckTimer >= 0.5f) {
+        m_bgCheckTimer = 0.0f;
+        SampleBackgroundBrightness();
+    }
+
     // Cycle idle eye expressions so EVE feels alive, not a static stare.
     if (m_state == RobotState::Idle && !m_dragging) {
         m_eyeExprTimer -= dt;
@@ -308,8 +359,16 @@ void RobotRenderer::Update() {
         }
     }
 
-    if (m_state != RobotState::Working && m_state != RobotState::Walking && !m_dragging)
+    if (m_state != RobotState::Working && m_state != RobotState::Walking &&
+        m_state != RobotState::Spinning && !m_dragging)
         CheckKeyboardActivity();
+    if (m_state == RobotState::Spinning && !m_dragging) {
+        m_spinTimer += dt;
+        if (m_spinTimer >= m_spinDuration) {
+            m_userWalking = true;
+            SetState(RobotState::Walking, 999.0f);
+        }
+    }
     if (m_state == RobotState::Walking && !m_dragging) {
         float dx = m_targetX - m_screenX;
         if (fabs(dx) < 3.0f) {
@@ -327,6 +386,9 @@ void RobotRenderer::Update() {
     if (!m_dragging && m_stateTimer >= m_nextBehaviorTime) {
         if (m_state == RobotState::Working || m_state == RobotState::Greeting)
             SetState(RobotState::Idle, GetIdleDuration());
+        else if (m_state == RobotState::Spinning) {
+            // Spin finished — transition to walking handled above
+        }
         else if (m_state == RobotState::Walking) {
             if (fabs(m_targetX - m_screenX) < 3.0f)
                 SetState(RobotState::Idle, GetIdleDuration());
@@ -355,6 +417,72 @@ void RobotRenderer::DrawHoverGlow(float cx, float baseY) {
     float r = 20 * pulse;
     D2D1_ELLIPSE glow = D2D1::Ellipse(D2D1::Point2F(cx, baseY), r, r * 0.32f);
     m_target->FillEllipse(glow, m_brushGlow.Get());
+}
+
+// ── Adaptive color scheme ─────────────────────────────────────────────
+// Samples screen pixels around the robot to detect bright backgrounds.
+// When background is bright, body switches to dark for visibility.
+
+void RobotRenderer::SampleBackgroundBrightness() {
+    if (!m_hwnd) return;
+
+    RECT rc;
+    GetWindowRect(m_hwnd, &rc);
+    int cx = (rc.left + rc.right) / 2;
+    int cy = (rc.top + rc.bottom) / 2;
+
+    HDC screenDC = GetDC(nullptr);
+    if (!screenDC) return;
+
+    // Sample 5 points around (not under) the robot window
+    int offsets[][2] = {
+        { -130,    0 }, { 130,    0 },
+        {    0, -110 }, {   0,  110 },
+        {  -90,   90 },
+    };
+    int totalLum = 0;
+    int count = 0;
+    for (auto& off : offsets) {
+        int px = cx + off[0];
+        int py = cy + off[1];
+        // Skip if off-screen
+        if (px < 0 || py < 0) continue;
+        COLORREF c = GetPixel(screenDC, px, py);
+        int r = GetRValue(c), g = GetGValue(c), b = GetBValue(c);
+        // Perceived luminance (Rec. 601 weighting)
+        totalLum += (r * 299 + g * 587 + b * 114) / 1000;
+        count++;
+    }
+    ReleaseDC(nullptr, screenDC);
+
+    if (count == 0) return;
+    int avgLum = totalLum / count;
+    bool shouldBeDark = (avgLum > 160);
+
+    if (shouldBeDark != m_darkMode) {
+        m_darkMode = shouldBeDark;
+        UpdateColorScheme();
+    }
+}
+
+void RobotRenderer::UpdateColorScheme() {
+    if (m_darkMode) {
+        // Dark body palette for bright backgrounds
+        m_brushWhite->SetColor(D2D1::ColorF(0xFF1A1A1A));
+        m_brushWhiteLight->SetColor(D2D1::ColorF(0xFF333333));
+        m_brushWhiteShade->SetColor(D2D1::ColorF(0xFF0A0A0A));
+        m_brushWhiteMid->SetColor(D2D1::ColorF(0xFF1E1E1E));
+        m_brushShadow->SetColor(D2D1::ColorF(0x44000000));
+        m_brushGlow->SetColor(D2D1::ColorF(0xFFCFF0FF));
+    } else {
+        // Original white body palette
+        m_brushWhite->SetColor(C_WHITE);
+        m_brushWhiteLight->SetColor(C_WHITE_LIGHT);
+        m_brushWhiteShade->SetColor(C_WHITE_SHADE);
+        m_brushWhiteMid->SetColor(C_WHITE_MID);
+        m_brushShadow->SetColor(C_SHADOW);
+        m_brushGlow->SetColor(C_GLOW);
+    }
 }
 
 void RobotRenderer::DrawEggBody(float cx, float cy, float bob) {
@@ -387,7 +515,7 @@ void RobotRenderer::DrawSingleEye(float ex, float ey, float halfW, float halfH, 
     m_target->FillEllipse(inner, m_brushNeonBright.Get());
 
     D2D1_ELLIPSE core = D2D1::Ellipse(D2D1::Point2F(ex, ey - halfH * 0.25f), halfW * 0.22f, halfH * 0.3f);
-    m_target->FillEllipse(core, m_brushWhiteLight.Get());
+    m_target->FillEllipse(core, m_brushSpark.Get());
 
     if (rotated) {
         m_target->SetTransform(D2D1::Matrix3x2F::Identity());
@@ -542,6 +670,29 @@ void RobotRenderer::DrawGear(float cx, float cy, float r) {
     m_target->FillEllipse(dot, m_brushNeon.Get());
 }
 
+void RobotRenderer::DrawSpinningArms(float cx, float cy, float bob, float spinAngle) {
+    float armHalfW = 6.5f;
+    float armHalfH = 20.0f;
+    float orbitR = 42.0f;
+
+    float angle1 = spinAngle * 3.14159265f / 180.0f;
+    float ax1 = cx + orbitR * cosf(angle1);
+    float ay1 = cy + bob + orbitR * 0.6f * sinf(angle1);
+
+    D2D1_ELLIPSE a1 = D2D1::Ellipse(D2D1::Point2F(ax1, ay1), armHalfW, armHalfH);
+    m_target->FillEllipse(a1, m_brushWhite.Get());
+    D2D1_ELLIPSE a1s = D2D1::Ellipse(D2D1::Point2F(ax1 + 2, ay1), armHalfW - 2, armHalfH - 5);
+    m_target->FillEllipse(a1s, m_brushWhiteMid.Get());
+
+    float angle2 = angle1 + 3.14159265f;
+    float ax2 = cx + orbitR * cosf(angle2);
+    float ay2 = cy + bob + orbitR * 0.6f * sinf(angle2);
+    D2D1_ELLIPSE a2 = D2D1::Ellipse(D2D1::Point2F(ax2, ay2), armHalfW, armHalfH);
+    m_target->FillEllipse(a2, m_brushWhite.Get());
+    D2D1_ELLIPSE a2s = D2D1::Ellipse(D2D1::Point2F(ax2 + 2, ay2), armHalfW - 2, armHalfH - 5);
+    m_target->FillEllipse(a2s, m_brushWhiteMid.Get());
+}
+
 void RobotRenderer::DrawRobot() {
     D2D1_SIZE_F size = m_target->GetSize();
     float cx = size.width / 2;
@@ -571,6 +722,22 @@ void RobotRenderer::DrawRobot() {
             DrawArm(cx, cy, bob, true, false, 0);
             DrawArm(cx, cy, bob, false, false, 0);
             DrawPlantSymbol(cx, cy + bob);
+            break;
+        }
+        case RobotState::Spinning: {
+            float sBob = 3.0f * sinf(t * 4.0f * (float)M_PI);
+            // 2 full revolutions over m_spinDuration: angle = 720 deg * progress
+            float progress = Clamp01(m_spinTimer / m_spinDuration);
+            float spinAngle = 720.0f * progress;
+            // Start from the side, spin outward
+            spinAngle += m_facingRight ? 90.0f : 270.0f;
+
+            DrawGroundShadow(cx, cy + sBob + 66, 42);
+            DrawHoverGlow(cx, cy + sBob + 66);
+            DrawEggBody(cx, cy, sBob);
+            DrawHead(cx, cy + sBob - 74.0f, EyeExpression::Surprised, false);
+            DrawSpinningArms(cx, cy, sBob, spinAngle);
+            DrawPlantSymbol(cx, cy + sBob);
             break;
         }
         case RobotState::Walking: {
@@ -641,8 +808,6 @@ void RobotRenderer::DrawRobot() {
             DrawArm(cx, cy - 10 + wBob, wBob, true, false, 0);
             DrawArm(cx, cy - 10 + wBob, wBob, false, false, 0);
             DrawPlantSymbol(cx, cy + wBob);
-            DrawGear(cx - 12, cy - 102 + wBob + 3 * sinf(t * 4 * (float)M_PI), 6);
-            DrawGear(cx + 12, cy - 106 + wBob + 3 * sinf(t * 4 * (float)M_PI + (float)M_PI), 5);
             break;
         }
         case RobotState::Celebrating: {
@@ -674,6 +839,24 @@ void RobotRenderer::DrawRobot() {
             DrawArm(cx, cy, sBob, true, false, 0);
             DrawArm(cx, cy, sBob, false, false, 0);
             break;
+        }
+    }
+
+    // Thinking overlay: floating dots above head while AI is processing
+    if (m_thinking) {
+        float thinkY = cy + bob - 100.0f;
+        for (int i = 0; i < 3; i++) {
+            float phase = t * 3.0f + i * 0.5f;
+            float alpha = 0.5f + 0.5f * sinf(phase * (float)M_PI);
+            float yOff = -6.0f * sinf(phase * (float)M_PI);
+            float dotR = 3.0f + 1.5f * alpha;
+            D2D1_ELLIPSE dot = D2D1::Ellipse(
+                D2D1::Point2F(cx + (i - 1) * 12.0f, thinkY + yOff), dotR, dotR);
+            D2D1::ColorF dotColor(0xFF00CFFF);
+            dotColor.a = alpha;
+            ComPtr<ID2D1SolidColorBrush> thinkBrush;
+            m_target->CreateSolidColorBrush(dotColor, thinkBrush.GetAddressOf());
+            m_target->FillEllipse(dot, thinkBrush.Get());
         }
     }
 }

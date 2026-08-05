@@ -11,7 +11,8 @@ enum class RobotState {
     Greeting,
     Working,
     Celebrating,
-    Sleeping
+    Sleeping,
+    Spinning
 };
 
 enum class ClickRegion {
@@ -49,6 +50,7 @@ public:
     bool IsDragging() const { return m_dragging; }
     bool WantsInputDialog() const { return m_wantsInputDialog; }
     void ClearInputDialogFlag() { m_wantsInputDialog = false; }
+    void SetThinking(bool thinking) { m_thinking = thinking; }
 
     float GetRobotScreenX() const { return m_screenX; }
     float GetRobotScreenY() const { return m_screenY; }
@@ -70,6 +72,8 @@ private:
     ComPtr<ID2D1SolidColorBrush> m_brushPlant;        // green plant symbol
     ComPtr<ID2D1SolidColorBrush> m_brushShadow;      // ground shadow
     ComPtr<ID2D1SolidColorBrush> m_brushGlow;        // hover glow
+    ComPtr<ID2D1SolidColorBrush> m_brushSpark;       // eye spark (always white)
+    ComPtr<ID2D1SolidColorBrush> m_brushOutline;     // dark outline for bright backgrounds
 
     // Animation
     float m_animTime = 0.0f;
@@ -89,10 +93,16 @@ private:
     float m_hoverSpeed = 100.0f;
     bool m_userWalking = false;
 
+    // Spin state: arms revolve twice before walking
+    float m_spinTimer = 0.0f;
+    float m_spinDuration = 1.0f; // ~1s for 2 full revolutions
+    bool m_spinWalkLeft = false;
+
     // Drag state
     bool m_mouseDown = false;
     bool m_dragging = false;
-    int m_downX = 0, m_downY = 0;       // mouse pos at press
+    int m_downX = 0, m_downY = 0;       // client coords at press
+    int m_downScreenX = 0, m_downScreenY = 0; // screen coords at press
     float m_dragStartX = 0, m_dragStartY = 0; // robot pos at press
     float m_holdTimer = 0.0f;
 
@@ -105,16 +115,26 @@ private:
     bool m_lastKeyState[256] = {};
     HWND m_lastForegroundWnd = nullptr;
 
+    // Adaptive color: dark body on bright backgrounds
+    bool m_darkMode = false;
+    float m_bgCheckTimer = 0.0f;
+
+    // Thinking state (set during AI requests)
+    bool m_thinking = false;
+
     // Methods
     void PickNextBehavior();
     void SetState(RobotState state, float duration);
     void MoveWindowToRobot();
     void WalkToEdge(bool left);
+    void StartSpinThenWalk(bool left);
     void CheckKeyboardActivity();
     float GetScreenLeftEdge();
     float GetScreenRightEdge();
     ClickRegion HitTest(int mouseX, int mouseY);
     float ComputeWalkLeanDeg() const;
+    void SampleBackgroundBrightness();
+    void UpdateColorScheme();
 
     // EVE drawing
     void DrawEggBody(float cx, float cy, float bob);
@@ -123,6 +143,7 @@ private:
     void DrawHoverGlow(float cx, float baseY);
     void DrawArm(float cx, float cy, float bob, bool left, bool waving, float waveAngle,
                  float leanDeg = 0.0f, float dislocate = 0.0f, float squashX = 1.0f);
+    void DrawSpinningArms(float cx, float cy, float bob, float spinAngle);
     void DrawGroundShadow(float cx, float baseY, float w);
     void DrawPlantSymbol(float cx, float cy);
     void DrawGear(float cx, float cy, float r);

@@ -64,6 +64,7 @@ static HHOOK g_kbHook = nullptr;
 static bool g_capsLockPressed = false;
 static std::chrono::steady_clock::time_point g_capsLockPressTime;
 static std::atomic<bool> g_capsLockRecording(false);
+static bool g_autoTTS = true;  // Auto-read AI responses aloud
 
 // Try to auto-init whisper from common model paths
 static bool TryAutoInitWhisper() {
@@ -1521,6 +1522,17 @@ static LRESULT CALLBACK BubbleWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             // Update conversation display
             RefreshConversation(hwnd);
 
+            // Auto-TTS: read the response aloud
+            if (g_autoTTS && !response.empty()) {
+                std::string utf8Resp;
+                int elen = WideCharToMultiByte(CP_UTF8, 0, response.c_str(), (int)response.size(), nullptr, 0, nullptr, nullptr);
+                if (elen > 0) {
+                    utf8Resp.resize(elen);
+                    WideCharToMultiByte(CP_UTF8, 0, response.c_str(), (int)response.size(), &utf8Resp[0], elen, nullptr, nullptr);
+                    argos::ttsSpeak(utf8Resp);
+                }
+            }
+
             // Restore focus to input
             SetFocus(GetDlgItem(hwnd, IDC_BUBBLE_EDIT));
 
@@ -2176,6 +2188,17 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             // Show it even if it's an error — so user sees something is happening
             if (!g_proactiveMsg.empty() && !g_bubbleHwnd) {
                 ShowProactiveBubble(hwnd, g_proactiveMsg);
+                // Auto-TTS: read proactive bubble aloud
+                if (g_autoTTS) {
+                    std::wstring cleanMsg = StripThinkTags(g_proactiveMsg);
+                    std::string utf8Msg;
+                    int elen = WideCharToMultiByte(CP_UTF8, 0, cleanMsg.c_str(), (int)cleanMsg.size(), nullptr, 0, nullptr, nullptr);
+                    if (elen > 0) {
+                        utf8Msg.resize(elen);
+                        WideCharToMultiByte(CP_UTF8, 0, cleanMsg.c_str(), (int)cleanMsg.size(), &utf8Msg[0], elen, nullptr, nullptr);
+                        argos::ttsSpeak(utf8Msg);
+                    }
+                }
             }
             // Timer restarts when bubble is destroyed (WM_DESTROY in ProactiveBubbleProc)
             // This ensures 10 seconds starts AFTER the bubble disappears
@@ -2183,7 +2206,12 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         }
 
         case WM_CAPSLOCK_PUSHTOTALK: {
-            // Caps Lock pressed — start push-to-talk
+            // Caps Lock pressed — if TTS is speaking, stop it instead of recording
+            if (argos::ttsIsSpeaking()) {
+                argos::ttsStop();
+                return 0;
+            }
+            // Otherwise, start push-to-talk
             // If bubble is open, record into it; otherwise open bubble first
             if (g_bubbleHwnd) {
                 StartVoiceRecording(g_bubbleHwnd, 30);

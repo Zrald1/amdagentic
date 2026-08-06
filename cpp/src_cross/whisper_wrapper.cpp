@@ -197,13 +197,11 @@ std::vector<float> recordAudio(int durationSeconds) {
     return f32;
 
 #else
-    // Windows: use WaveIn API
+    // Windows: use WaveIn API with chunked buffers for push-to-talk support
     #ifdef _WIN32
     const int sampleRate = 16000;
     const int channels = 1;
     const int bitsPerSample = 16;
-    int totalSamples = durationSeconds * sampleRate;
-    int bufferSize = totalSamples * (bitsPerSample / 8) * channels;
 
     HWAVEIN hWaveIn;
     WAVEFORMATEX wfx;
@@ -220,40 +218,77 @@ std::vector<float> recordAudio(int durationSeconds) {
         return {};
     }
 
-    std::vector<int16_t> pcm16(totalSamples, 0);
-    WAVEHDR whdr;
-    whdr.lpData = (LPSTR)pcm16.data();
-    whdr.dwBufferLength = bufferSize;
-    whdr.dwBytesRecorded = 0;
-    whdr.dwUser = 0;
-    whdr.dwFlags = 0;
-    whdr.dwLoops = 0;
-    whdr.lpNext = nullptr;
-    whdr.reserved = 0;
+    // Use small chunked buffers (0.5 seconds each) so stopRecording() captures partial audio
+    const int chunkSamples = sampleRate / 2;  // 0.5 second = 8000 samples
+    const int chunkBytes = chunkSamples * (bitsPerSample / 8) * channels;
+    const int maxChunks = durationSeconds * 2;  // total chunks for max duration
 
-    waveInPrepareHeader(hWaveIn, &whdr, sizeof(WAVEHDR));
-    waveInAddBuffer(hWaveIn, &whdr, sizeof(WAVEHDR));
-    waveInStart(hWaveIn);
+    std::vector<int16_t> allPcm16;
+    allPcm16.reserve(durationSeconds * sampleRate);
 
-    // Wait for recording to complete
-    while (s_recording.load() && (whdr.dwFlags & WHDR_DONE) == 0) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    for (int chunkIdx = 0; chunkIdx < maxChunks && s_recording.load(); chunkIdx++) {
+        std::vector<int16_t> chunkBuf(chunkSamples, 0);
+        WAVEHDR whdr;
+        whdr.lpData = (LPSTR)chunkBuf.data();
+        whdr.dwBufferLength = chunkBytes;
+        whdr.dwBytesRecorded = 0;
+        whdr.dwUser = 0;
+        whdr.dwFlags = 0;
+        whdr.dwLoops = 0;
+        whdr.lpNext = nullptr;
+        whdr.reserved = 0;
+
+        if (waveInPrepareHeader(hWaveIn, &whdr, sizeof(WAVEHDR)) != MMSYSERR_NOERROR) break;
+        if (waveInAddBuffer(hWaveIn, &whdr, sizeof(WAVEHDR)) != MMSYSERR_NOERROR) {
+            waveInUnprepareHeader(hWaveIn, &whdr, sizeof(WAVEHDR));
+            break;
+        }
+
+        if (chunkIdx == 0) waveInStart(hWaveIn);
+
+        // Wait for this chunk to complete or recording to stop
+        while (s_recording.load() && (whdr.dwFlags & WHDR_DONE) == 0) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(30));
+        }
+
+        // Stop the device if recording is done
+        if (!s_recording.load()) {
+            waveInStop(hWaveIn);
+            // Give a brief moment for the buffer to be marked done
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+
+        int recordedBytes = whdr.dwBytesRecorded;
+        if (recordedBytes == 0 && (whdr.dwFlags & WHDR_DONE)) {
+            recordedBytes = chunkBytes;
+        }
+        if (recordedBytes == 0 && chunkIdx == 0) {
+            // First chunk with no data — device might need a moment
+            recordedBytes = chunkBytes;
+        }
+
+        waveInUnprepareHeader(hWaveIn, &whdr, sizeof(WAVEHDR));
+
+        if (recordedBytes > 0) {
+            int recordedSamples = recordedBytes / (bitsPerSample / 8) / channels;
+            allPcm16.insert(allPcm16.end(), chunkBuf.data(), chunkBuf.data() + recordedSamples);
+        }
     }
 
-    waveInStop(hWaveIn);
-    // Get actual number of bytes recorded (may be less if stopRecording() was called)
-    int recordedBytes = whdr.dwBytesRecorded;
-    if (recordedBytes == 0) recordedBytes = bufferSize;
-    waveInUnprepareHeader(hWaveIn, &whdr, sizeof(WAVEHDR));
+    waveInReset(hWaveIn);
     waveInClose(hWaveIn);
 
     s_recording.store(false);
 
-    // Only convert the actually recorded samples
-    int recordedSamples = recordedBytes / (bitsPerSample / 8) / channels;
-    std::vector<int16_t> actualPcm(recordedSamples, 0);
-    memcpy(actualPcm.data(), pcm16.data(), recordedSamples * 2);
-    return pcm16ToFloat(actualPcm);
+    if (allPcm16.empty()) {
+        LOGE("recordAudio: no audio captured\n");
+        return {};
+    }
+
+    LOGI("recordAudio: captured %zu samples (%.1f seconds)\n",
+         allPcm16.size(), (float)allPcm16.size() / 16000.0f);
+
+    return pcm16ToFloat(allPcm16);
     #else
     // Other platforms: not supported
     s_recording.store(false);

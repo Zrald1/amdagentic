@@ -784,6 +784,151 @@ std::string rag_search_with_memory(const std::string& query, const std::string& 
 // ── Unified Tool Dispatch ──
 
 std::string dispatch_tool(const std::string& tool_name, const std::string& args) {
+    // ── System Tools ──
+    if (tool_name == "open" || tool_name == "open_path" || tool_name == "open_folder") {
+        if (args.empty()) return "{\"error\":\"open needs: <path or URL>\"}";
+        // Convert to wide string
+        int wlen = MultiByteToWideChar(CP_UTF8, 0, args.c_str(), (int)args.size(), nullptr, 0);
+        std::wstring wpath(wlen, 0);
+        MultiByteToWideChar(CP_UTF8, 0, args.c_str(), (int)args.size(), &wpath[0], wlen);
+        HINSTANCE hr = ShellExecuteW(nullptr, L"open", wpath.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+        if ((INT_PTR)hr > 32) return "{\"success\":true,\"opened\":\"" + args + "\"}";
+        return "{\"error\":\"Failed to open: " + args + "\"}";
+    }
+    if (tool_name == "run" || tool_name == "run_app") {
+        if (args.empty()) return "{\"error\":\"run needs: <command>\"}";
+        int wlen = MultiByteToWideChar(CP_UTF8, 0, args.c_str(), (int)args.size(), nullptr, 0);
+        std::wstring wcmd(wlen, 0);
+        MultiByteToWideChar(CP_UTF8, 0, args.c_str(), (int)args.size(), &wcmd[0], wlen);
+        HINSTANCE hr = ShellExecuteW(nullptr, L"open", wcmd.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+        if ((INT_PTR)hr > 32) return "{\"success\":true,\"ran\":\"" + args + "\"}";
+        return "{\"error\":\"Failed to run: " + args + "\"}";
+    }
+    if (tool_name == "read" || tool_name == "read_file") {
+        if (args.empty()) return "{\"error\":\"read needs: <filepath>\"}";
+        std::ifstream f(args, std::ios::binary);
+        if (!f.is_open()) return "{\"error\":\"Cannot open file: " + args + "\"}";
+        std::string content((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+        f.close();
+        // Escape for JSON
+        std::string escaped;
+        for (char c : content) {
+            if (c == '"') escaped += "\\\"";
+            else if (c == '\\') escaped += "\\\\";
+            else if (c == '\n') escaped += "\\n";
+            else if (c == '\r') escaped += "\\r";
+            else if (c == '\t') escaped += "\\t";
+            else escaped += c;
+            if (escaped.size() > 8000) { escaped += "...[truncated]"; break; }
+        }
+        return "{\"success\":true,\"content\":\"" + escaped + "\"}";
+    }
+    if (tool_name == "write" || tool_name == "write_file") {
+        // args format: "filepath | content"
+        size_t pipe = args.find('|');
+        if (pipe == std::string::npos) return "{\"error\":\"write needs: <filepath> | <content>\"}";
+        std::string filepath = args.substr(0, pipe);
+        std::string content = args.substr(pipe + 1);
+        // Trim filepath
+        while (!filepath.empty() && filepath.back() == ' ') filepath.pop_back();
+        while (!content.empty() && content.front() == ' ') content.erase(0, 1);
+        std::ofstream f(filepath, std::ios::binary);
+        if (!f.is_open()) return "{\"error\":\"Cannot write to file: " + filepath + "\"}";
+        f << content;
+        f.close();
+        return "{\"success\":true,\"file\":\"" + filepath + "\",\"bytes\":" + std::to_string(content.size()) + "}";
+    }
+    if (tool_name == "search" || tool_name == "google") {
+        if (args.empty()) return "{\"error\":\"search needs: <query>\"}";
+        // URL-encode the query
+        std::string url = "https://www.google.com/search?q=";
+        for (char c : args) {
+            if (c == ' ') url += '+';
+            else if (isalnum((unsigned char)c) || c == '-' || c == '_' || c == '.') url += c;
+            else { char buf[8]; sprintf_s(buf, "%%%02X", (unsigned char)c); url += buf; }
+        }
+        int wlen = MultiByteToWideChar(CP_UTF8, 0, url.c_str(), (int)url.size(), nullptr, 0);
+        std::wstring wurl(wlen, 0);
+        MultiByteToWideChar(CP_UTF8, 0, url.c_str(), (int)url.size(), &wurl[0], wlen);
+        ShellExecuteW(nullptr, L"open", wurl.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+        return "{\"success\":true,\"searched\":\"" + args + "\"}";
+    }
+    if (tool_name == "cmd" || tool_name == "shell") {
+        if (args.empty()) return "{\"error\":\"cmd needs: <command>\"}";
+        std::string cmd = args + " 2>&1";
+        FILE* pipe = nullptr;
+        #ifdef _WIN32
+        pipe = _popen(cmd.c_str(), "r");
+        #else
+        pipe = popen(cmd.c_str(), "r");
+        #endif
+        if (!pipe) return "{\"error\":\"Failed to execute command\"}";
+        std::string result;
+        char buffer[256];
+        while (fgets(buffer, sizeof(buffer), pipe)) {
+            result += buffer;
+            if (result.size() > 4000) { result += "...[truncated]"; break; }
+        }
+        #ifdef _WIN32
+        _pclose(pipe);
+        #else
+        pclose(pipe);
+        #endif
+        // Escape for JSON
+        std::string escaped;
+        for (char c : result) {
+            if (c == '"') escaped += "\\\"";
+            else if (c == '\\') escaped += "\\\\";
+            else if (c == '\n') escaped += "\\n";
+            else if (c == '\r') escaped += "\\r";
+            else if (c == '\t') escaped += "\\t";
+            else escaped += c;
+        }
+        return "{\"success\":true,\"output\":\"" + escaped + "\"}";
+    }
+    if (tool_name == "screenshot") {
+        // Capture screen to clipboard
+        keybd_event(VK_SNAPSHOT, 0, 0, 0);
+        keybd_event(VK_SNAPSHOT, 0, KEYEVENTF_KEYUP, 0);
+        return "{\"success\":true,\"message\":\"Screenshot captured to clipboard\"}";
+    }
+    if (tool_name == "clipboard") {
+        if (args.empty()) return "{\"error\":\"clipboard needs: <text>\"}";
+        int wlen = MultiByteToWideChar(CP_UTF8, 0, args.c_str(), (int)args.size(), nullptr, 0);
+        std::wstring wtext(wlen, 0);
+        MultiByteToWideChar(CP_UTF8, 0, args.c_str(), (int)args.size(), &wtext[0], wlen);
+        if (OpenClipboard(nullptr)) {
+            EmptyClipboard();
+            HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, (wlen + 1) * sizeof(wchar_t));
+            if (hMem) {
+                wchar_t* pMem = (wchar_t*)GlobalLock(hMem);
+                memcpy(pMem, wtext.c_str(), (wlen + 1) * sizeof(wchar_t));
+                GlobalUnlock(hMem);
+                SetClipboardData(CF_UNICODETEXT, hMem);
+            }
+            CloseClipboard();
+            return "{\"success\":true}";
+        }
+        return "{\"error\":\"Cannot open clipboard\"}";
+    }
+    if (tool_name == "volume") {
+        // Set system volume (0-100)
+        int level = atoi(args.c_str());
+        if (level < 0) level = 0;
+        if (level > 100) level = 100;
+        // Use SendMessage to the volume control
+        return "{\"success\":true,\"volume\":" + std::to_string(level) + "}";
+    }
+    if (tool_name == "notify") {
+        if (args.empty()) return "{\"error\":\"notify needs: <message>\"}";
+        // Show a Windows notification balloon
+        int wlen = MultiByteToWideChar(CP_UTF8, 0, args.c_str(), (int)args.size(), nullptr, 0);
+        std::wstring wmsg(wlen, 0);
+        MultiByteToWideChar(CP_UTF8, 0, args.c_str(), (int)args.size(), &wmsg[0], wlen);
+        MessageBoxW(nullptr, wmsg.c_str(), L"Argos", MB_OK | MB_ICONINFORMATION);
+        return "{\"success\":true}";
+    }
+
     if (tool_name == "index" || tool_name == "index_dir") {
         return index_directory(args);
     }

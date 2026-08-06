@@ -1204,9 +1204,9 @@ void RobotRenderer::DrawToolLightning(float cx, float cy, float bob) {
 void RobotRenderer::DrawShield(float cx, float cy, float bob, float leanDeg, float squashX) {
     float bodyHalfW = 32.0f;
     float gap = -4.0f;
-    float shieldR = 26.0f;
+    float shieldR = 34.0f;
     float restX = cx + (-1.0f) * (bodyHalfW + gap + shieldR * 0.6f);
-    float restY = cy - 4.0f + bob;
+    float restY = cy - 12.0f + bob;
 
     bool transformed = fabsf(leanDeg) > 0.01f || fabsf(squashX - 1.0f) > 0.001f;
     D2D1_POINT_2F pivot = D2D1::Point2F(cx - bodyHalfW * 0.5f, cy - 18 + bob);

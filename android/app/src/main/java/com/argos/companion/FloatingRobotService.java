@@ -411,6 +411,36 @@ public class FloatingRobotService extends Service implements SurfaceHolder.Callb
         });
     }
 
+    // Called from C++ via JNI — shows AI reasoning/thoughts in bubble
+    public void onChatThoughts(final String thoughts) {
+        android.os.Handler handler = new android.os.Handler(getMainLooper());
+        handler.post(() -> {
+            int count = convoLayout.getChildCount();
+            // Find existing thoughts view or create new one
+            for (int i = count - 1; i >= 0; i--) {
+                View v = convoLayout.getChildAt(i);
+                if (v instanceof TextView) {
+                    TextView tv = (TextView) v;
+                    if (tv.getTag() != null && tv.getTag().equals("thoughts")) {
+                        tv.setText("💭 " + thoughts);
+                        convoScroll.post(() -> convoScroll.fullScroll(ScrollView.FOCUS_DOWN));
+                        return;
+                    }
+                }
+            }
+            // Create new thoughts view
+            TextView tv = new TextView(this);
+            tv.setText("💭 " + thoughts);
+            tv.setTextColor(Color.rgb(180, 180, 200));
+            tv.setTextSize(13f);
+            tv.setTypeface(tv.getTypeface(), android.graphics.Typeface.ITALIC);
+            tv.setPadding(0, 8, 0, 8);
+            tv.setTag("thoughts");
+            convoLayout.addView(tv);
+            convoScroll.post(() -> convoScroll.fullScroll(ScrollView.FOCUS_DOWN));
+        });
+    }
+
     // Called from C++ via JNI
     public void onChatResponse(final String response) {
         android.os.Handler handler = new android.os.Handler(getMainLooper());
@@ -436,10 +466,14 @@ public class FloatingRobotService extends Service implements SurfaceHolder.Callb
         android.os.Handler handler = new android.os.Handler(getMainLooper());
         handler.post(() -> {
             int count = convoLayout.getChildCount();
-            if (count > 0) {
-                View last = convoLayout.getChildAt(count - 1);
-                if (last instanceof TextView) {
-                    TextView tv = (TextView) last;
+            for (int i = count - 1; i >= 0; i--) {
+                View v = convoLayout.getChildAt(i);
+                if (v instanceof TextView) {
+                    TextView tv = (TextView) v;
+                    if (tv.getTag() != null && tv.getTag().equals("thoughts")) {
+                        // Thoughts view found — add response after it
+                        break;
+                    }
                     String current = tv.getText().toString();
                     if (current.startsWith("Argos: ")) {
                         tv.setText("Argos: " + delta);

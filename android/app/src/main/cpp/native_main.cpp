@@ -220,6 +220,9 @@ Java_com_argos_companion_FloatingRobotService_nativeSendChat(JNIEnv* env, jobjec
                 accumulated += delta;
                 callJavaMethod("onChatStream", "(Ljava/lang/String;)V", accumulated);
                 return !g_agent.m_abort.load();
+            },
+            [&](const std::string& thoughts) {
+                callJavaMethod("onChatThoughts", "(Ljava/lang/String;)V", thoughts);
             });
 
         LOGI("Chat response: %s (len=%zu)", response.c_str(), response.size());

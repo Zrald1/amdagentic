@@ -145,6 +145,9 @@ std::string dispatch_tool(const std::string& tool_name, const std::string& args)
     if (name == "forget") {
         return tool_forget();
     }
+    if (name == "search") {
+        return "{\"error\":\"Web search not available on mobile platform. Use list_files, read, or cmd tools instead.\"}";
+    }
     if (name == "rag_search" || name == "search_files" || name == "search_filename") {
         return "{\"error\":\"RAG search not available on this platform\"}";
     }

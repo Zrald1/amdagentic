@@ -108,6 +108,58 @@ static std::string extractContent(const std::string& json) {
     return "";
 }
 
+// Extract "reasoning_content" value from a JSON string (DeepSeek reasoning model)
+// Uses same logic as extractContent but searches for "reasoning_content" key
+static std::string extractReasoningContent(const std::string& json) {
+    size_t keyPos = json.find("\"reasoning_content\"");
+    while (keyPos != std::string::npos) {
+        size_t colonPos = json.find(':', keyPos);
+        if (colonPos == std::string::npos) break;
+        
+        size_t valueStart = colonPos + 1;
+        while (valueStart < json.size() && (json[valueStart] == ' ' || json[valueStart] == '\t')) {
+            valueStart++;
+        }
+        
+        if (valueStart >= json.size()) break;
+        
+        // Check for null: "reasoning_content":null
+        if (json[valueStart] == 'n' && valueStart + 4 <= json.size() &&
+            json.substr(valueStart, 4) == "null") {
+            return "";
+        }
+        
+        if (json[valueStart] == '"') {
+            size_t contentStart = valueStart + 1;
+            size_t endQuote = findEndQuote(json, contentStart);
+            if (endQuote != std::string::npos) {
+                std::string content = json.substr(contentStart, endQuote - contentStart);
+                // Unescape
+                std::string unescaped;
+                for (size_t i = 0; i < content.size(); i++) {
+                    if (content[i] == '\\' && i + 1 < content.size()) {
+                        char next = content[i + 1];
+                        if (next == 'n') unescaped += '\n';
+                        else if (next == 'r') unescaped += '\r';
+                        else if (next == 't') unescaped += '\t';
+                        else if (next == '"') unescaped += '"';
+                        else if (next == '\\') unescaped += '\\';
+                        else if (next == '/') unescaped += '/';
+                        else unescaped += content[i];
+                        i++;
+                    } else {
+                        unescaped += content[i];
+                    }
+                }
+                return unescaped;
+            }
+        }
+        
+        keyPos = json.find("\"reasoning_content\"", keyPos + 18);
+    }
+    return "";
+}
+
 // Minimal JSON string escaper
 static std::string jsonEscape(const std::string& s) {
     std::string out;
@@ -153,12 +205,9 @@ void AgentClientCore::initSystemPrompt() {
         "1. [TOOL:list_files <dirpath>] — List files in a directory.\n"
         "2. [TOOL:cmd <command>] — Execute a shell command.\n"
         "3. [TOOL:read <filepath>] — Read file contents.\n"
-        "4. [TOOL:search <query>] — Web search.\n"
-        "5. [TOOL:screen_apps] — List open apps.\n"
-        "6. [TOOL:recall] — Load conversation memory.\n"
-        "7. [TOOL:rag_search <query>] — Search synced folders.\n"
-        "8. [TOOL:search_files <dirpath>|<query>] — Search file content.\n\n"
-        "Do NOT auto-trigger RAG on simple messages. Only use RAG tools when needed.\n"
+        "4. [TOOL:recall] — Load conversation memory.\n"
+        "5. [TOOL:forget] — Clear conversation memory.\n\n"
+        "Do NOT auto-trigger tools on simple messages. Only use tools when needed.\n"
         "If primary model is unavailable, fallback model is used automatically.";
 }
 
@@ -172,8 +221,9 @@ std::string AgentClientCore::buildJsonBody(const std::vector<ChatMessageCore>& m
     return body;
 }
 
-std::string AgentClientCore::parseSSEChunk(const std::string& chunk) {
+std::string AgentClientCore::parseSSEChunk(const std::string& chunk, std::string* thoughts) {
     std::string result;
+    std::string thoughtsAccum;
     size_t pos = 0;
     while (pos < chunk.size()) {
         size_t lineEnd = chunk.find('\n', pos);
@@ -192,12 +242,21 @@ std::string AgentClientCore::parseSSEChunk(const std::string& chunk) {
             if (data == "[DONE]") break;
             if (data.empty()) continue;
             
+            // Extract reasoning content (thoughts) if requested
+            if (thoughts) {
+                std::string reasoning = extractReasoningContent(data);
+                if (!reasoning.empty()) {
+                    thoughtsAccum += reasoning;
+                }
+            }
+            
             std::string content = extractContent(data);
             if (!content.empty()) {
                 result += content;
             }
         }
     }
+    if (thoughts) *thoughts = thoughtsAccum;
     return result;
 }
 
@@ -265,20 +324,27 @@ std::string AgentClientCore::chatWithMessages(const std::vector<ChatMessageCore>
 }
 
 std::string AgentClientCore::chatWithMessagesStreaming(const std::vector<ChatMessageCore>& messages,
-                                                        StreamCallbackCore callback) {
+                                                        StreamCallbackCore callback,
+                                                        ThoughtsCallbackCore thoughtsCallback) {
     std::string body = buildJsonBody(messages, true);
     std::string headers = "Authorization: Bearer " + m_apiKey + "\r\n";
     std::string url = m_serverUrl + "/chat/completions";
     argos::log(("POST streaming " + url).c_str());
 
     std::string fullResponse;
+    std::string fullThoughts;
     std::string leftover;
 
     std::string rawResponse = argos::httpPostStream(url, headers, body,
         [&](const std::string& chunk) -> bool {
             if (m_abort.load()) return false;
             std::string data = leftover + chunk;
-            std::string delta = parseSSEChunk(data);
+            std::string thoughts;
+            std::string delta = parseSSEChunk(data, &thoughts);
+            if (!thoughts.empty()) {
+                fullThoughts += thoughts;
+                if (thoughtsCallback) thoughtsCallback(fullThoughts);
+            }
             if (!delta.empty()) {
                 fullResponse += delta;
                 if (callback && !callback(delta)) return false;
@@ -302,7 +368,8 @@ std::string AgentClientCore::chatWithMessagesStreaming(const std::vector<ChatMes
         argos::log("Streaming response empty, falling back to non-streaming");
         return chatWithMessages(messages);
     }
-    argos::log(("Streaming done, response len=" + std::to_string(fullResponse.size())).c_str());
+    argos::log(("Streaming done, response len=" + std::to_string(fullResponse.size()) +
+                " thoughts len=" + std::to_string(fullThoughts.size())).c_str());
     return fullResponse;
 }
 
@@ -352,7 +419,8 @@ std::string AgentClientCore::chat(const std::string& userMessage) {
     return finalResponse;
 }
 
-std::string AgentClientCore::chatStreaming(const std::string& userMessage, StreamCallbackCore callback) {
+std::string AgentClientCore::chatStreaming(const std::string& userMessage, StreamCallbackCore callback,
+                              ThoughtsCallbackCore thoughtsCallback) {
     m_abort.store(false);
     m_history.push_back({"user", userMessage});
     argos_tools::rag_memory_save_conversation("user", userMessage);
@@ -381,7 +449,7 @@ std::string AgentClientCore::chatStreaming(const std::string& userMessage, Strea
         }
 
         if (iteration == 0) {
-            finalResponse = chatWithMessagesStreaming(messages, callback);
+            finalResponse = chatWithMessagesStreaming(messages, callback, thoughtsCallback);
         } else {
             finalResponse = chatWithMessages(messages);
         }

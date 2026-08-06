@@ -14,7 +14,7 @@ find_library(android-lib android)
 set(CROSS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../../../../cpp/src_cross)
 
 # ── whisper.cpp integration ──
-set(WHISPER_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../../../third_party/whisper.cpp)
+set(WHISPER_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../../../../third_party/whisper.cpp)
 
 # Build whisper.cpp as static library (disable examples, tests, etc.)
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "Build shared libs" FORCE)

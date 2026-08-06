@@ -8,6 +8,7 @@
 #include "../src_cross/whisper_wrapper.h"
 
 #include <sstream>
+#include <fstream>
 #include <filesystem>
 #include <windows.h>
 #include <iomanip>

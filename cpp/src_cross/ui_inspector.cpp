@@ -189,7 +189,119 @@ std::string InspectionSession::toJsonFiltered(const std::vector<int>& ids) const
 // On Android, these are implemented in platform_android.cpp via JNI.
 // We provide weak defaults here so the code compiles on all platforms.
 
-#ifndef __ANDROID__
+#ifdef __ANDROID__
+
+// Android: delegate to argos:: platform functions (implemented in platform_android.cpp via JNI)
+
+InspectionSession inspectUI(int maxDepth) {
+    std::string json = argos::getUITree(maxDepth);
+    InspectionSession session;
+    session.timestamp = argos::getTimeMs();
+
+    // Parse JSON to extract app name and elements
+    // Simple JSON parsing for our known format
+    size_t appPos = json.find("\"app\":\"");
+    if (appPos != std::string::npos) {
+        appPos += 7;
+        size_t end = json.find("\"", appPos);
+        if (end != std::string::npos) {
+            session.appName = json.substr(appPos, end - appPos);
+        }
+    }
+
+    size_t pkgPos = json.find("\"package\":\"");
+    if (pkgPos != std::string::npos) {
+        pkgPos += 11;
+        size_t end = json.find("\"", pkgPos);
+        if (end != std::string::npos) {
+            session.appPackage = json.substr(pkgPos, end - pkgPos);
+        }
+    }
+
+    // Parse elements — find all {"id":N,...} objects
+    // We do a simple pass to extract element IDs and text for convenience methods
+    size_t pos = 0;
+    while ((pos = json.find("\"id\":", pos)) != std::string::npos) {
+        pos += 5;
+        int id = 0;
+        while (pos < json.size() && json[pos] >= '0' && json[pos] <= '9') {
+            id = id * 10 + (json[pos] - '0');
+            pos++;
+        }
+
+        UIElement el;
+        el.id = id;
+
+        // Extract text
+        size_t textPos = json.find("\"text\":\"", pos);
+        size_t nextId = json.find("\"id\":", pos);
+        if (textPos != std::string::npos && (nextId == std::string::npos || textPos < nextId)) {
+            textPos += 8;
+            size_t end = textPos;
+            while (end < json.size() && json[end] != '"') {
+                if (json[end] == '\\') end++; // skip escaped char
+                end++;
+            }
+            el.text = json.substr(textPos, end - textPos);
+        }
+
+        // Extract desc
+        size_t descPos = json.find("\"desc\":\"", pos);
+        if (descPos != std::string::npos && (nextId == std::string::npos || descPos < nextId)) {
+            descPos += 8;
+            size_t end = descPos;
+            while (end < json.size() && json[end] != '"') {
+                if (json[end] == '\\') end++;
+                end++;
+            }
+            el.contentDesc = json.substr(descPos, end - descPos);
+        }
+
+        // Extract role
+        size_t rolePos = json.find("\"role\":\"", pos);
+        if (rolePos != std::string::npos && (nextId == std::string::npos || rolePos < nextId)) {
+            rolePos += 8;
+            size_t end = json.find("\"", rolePos);
+            if (end != std::string::npos) {
+                el.role = json.substr(rolePos, end - rolePos);
+            }
+        }
+
+        // Extract clickable
+        size_t clickPos = json.find("\"clickable\":true", pos);
+        if (clickPos != std::string::npos && (nextId == std::string::npos || clickPos < nextId)) {
+            el.isClickable = true;
+        }
+
+        // Extract editable
+        size_t editPos = json.find("\"editable\":true", pos);
+        if (editPos != std::string::npos && (nextId == std::string::npos || editPos < nextId)) {
+            el.isEditable = true;
+        }
+
+        session.elements.push_back(el);
+    }
+
+    return session;
+}
+
+std::string performAction(int elementId, const std::string& action, const std::string& extra) {
+    return argos::performUIAction(elementId, action, extra);
+}
+
+std::string takeScreenshot(const std::string& savePath) {
+    return argos::takeScreenshot(savePath);
+}
+
+std::string getNotifications() {
+    return argos::getNotificationsList();
+}
+
+std::string replyToNotification(int notificationIndex, const std::string& message) {
+    return argos::replyToNotificationByIdx(notificationIndex, message);
+}
+
+#else // non-Android stubs
 
 InspectionSession inspectUI(int maxDepth) {
     InspectionSession s;
@@ -213,7 +325,7 @@ std::string replyToNotification(int notificationIndex, const std::string& messag
     return "{\"error\":\"Notification reply not available on this platform\"}";
 }
 
-#endif // !__ANDROID__
+#endif // __ANDROID__
 
 // ── Convenience methods (cross-platform, use inspectUI + performAction) ──
 

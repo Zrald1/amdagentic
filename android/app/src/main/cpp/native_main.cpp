@@ -214,6 +214,8 @@ Java_com_argos_companion_FloatingRobotService_nativeSendChat(JNIEnv* env, jobjec
     std::thread([userMsg]() {
         LOGI("Chat thread started for message: %s", userMsg.c_str());
 
+        auto startTime = std::chrono::high_resolution_clock::now();
+
         std::string accumulated;
         std::string response = g_agent.chatStreaming(userMsg,
             [&](const std::string& delta) -> bool {
@@ -223,12 +225,23 @@ Java_com_argos_companion_FloatingRobotService_nativeSendChat(JNIEnv* env, jobjec
             },
             [&](const std::string& thoughts) {
                 callJavaMethod("onChatThoughts", "(Ljava/lang/String;)V", thoughts);
+            },
+            [&](const std::string& status) {
+                callJavaMethod("onToolStatus", "(Ljava/lang/String;)V", status);
             });
 
-        LOGI("Chat response: %s (len=%zu)", response.c_str(), response.size());
+        auto endTime = std::chrono::high_resolution_clock::now();
+        auto durationMs = std::chrono::duration_cast<std::chrono::milliseconds>(endTime - startTime).count();
+
+        LOGI("Chat response: %s (len=%zu, time=%lldms)", response.c_str(), response.size(), (long long)durationMs);
 
         g_robot.setThinking(false);
         g_robot.setTalking(true);
+
+        // Send metrics to Java
+        char metricsBuf[128];
+        snprintf(metricsBuf, sizeof(metricsBuf), "%lldms|%zuchars", (long long)durationMs, response.size());
+        callJavaMethod("onChatMetrics", "(Ljava/lang/String;)V", metricsBuf);
 
         if (g_agent.m_abort.load()) {
             callJavaMethod("onChatError", "(Ljava/lang/String;)V", "Cancelled");

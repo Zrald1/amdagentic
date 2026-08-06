@@ -5,6 +5,7 @@
 #include <cstring>
 #include <thread>
 #include <chrono>
+#include <fstream>
 
 // Find the closing quote of a JSON string value, skipping \" escaped quotes
 static size_t findEndQuote(const std::string& s, size_t start) {
@@ -179,6 +180,24 @@ static std::string jsonEscape(const std::string& s) {
 
 AgentClientCore::AgentClientCore() {
     initSystemPrompt();
+
+    // Try loading config from file (overrides defaults)
+    std::string configPath = argos::getAppDataDir() + "/argos_config.txt";
+    std::ifstream configFile(configPath);
+    if (configFile.is_open()) {
+        std::string line;
+        while (std::getline(configFile, line)) {
+            size_t eq = line.find('=');
+            if (eq == std::string::npos) continue;
+            std::string key = line.substr(0, eq);
+            std::string val = line.substr(eq + 1);
+            if (key == "server_url") m_serverUrl = val;
+            else if (key == "api_key") m_apiKey = val;
+            else if (key == "model") m_model = val;
+        }
+        configFile.close();
+        argos::log(("Loaded config from " + configPath).c_str());
+    }
 }
 
 AgentClientCore::~AgentClientCore() {}
@@ -294,7 +313,7 @@ std::string AgentClientCore::stripToolTags(const std::string& response) {
     return result;
 }
 
-std::string AgentClientCore::executeTools(const std::string& response) {
+std::string AgentClientCore::executeTools(const std::string& response, ToolStatusCallbackCore toolStatusCallback) {
     std::string results;
     size_t pos = 0;
     while ((pos = response.find("[TOOL:", pos)) != std::string::npos) {
@@ -306,9 +325,23 @@ std::string AgentClientCore::executeTools(const std::string& response) {
         std::string toolName = (spacePos != std::string::npos) ? tag.substr(0, spacePos) : tag;
         std::string toolArg = (spacePos != std::string::npos) ? tag.substr(spacePos + 1) : "";
 
+        // Notify status callback
+        if (toolStatusCallback) {
+            std::string status = "🔧 " + toolName;
+            if (!toolArg.empty() && toolArg.size() < 80) status += ": " + toolArg;
+            toolStatusCallback(status);
+        }
+
         // Dispatch to tools core
         std::string result = argos_tools::dispatch_tool(toolName, toolArg);
         results += "[Tool result: " + toolName + "]\n" + result + "\n";
+
+        // Notify completion
+        if (toolStatusCallback) {
+            std::string doneStatus = "✅ " + toolName + " done";
+            toolStatusCallback(doneStatus);
+        }
+
         pos = end + 1;
     }
     return results;
@@ -337,7 +370,8 @@ std::string AgentClientCore::chatWithMessages(const std::vector<ChatMessageCore>
 
 std::string AgentClientCore::chatWithMessagesStreaming(const std::vector<ChatMessageCore>& messages,
                                                         StreamCallbackCore callback,
-                                                        ThoughtsCallbackCore thoughtsCallback) {
+                                                        ThoughtsCallbackCore thoughtsCallback,
+                                                        ToolStatusCallbackCore toolStatusCallback) {
     std::string body = buildJsonBody(messages, true);
     std::string headers = "Authorization: Bearer " + m_apiKey + "\r\n";
     std::string url = m_serverUrl + "/chat/completions";
@@ -432,7 +466,8 @@ std::string AgentClientCore::chat(const std::string& userMessage) {
 }
 
 std::string AgentClientCore::chatStreaming(const std::string& userMessage, StreamCallbackCore callback,
-                              ThoughtsCallbackCore thoughtsCallback) {
+                              ThoughtsCallbackCore thoughtsCallback,
+                              ToolStatusCallbackCore toolStatusCallback) {
     m_abort.store(false);
     m_history.push_back({"user", userMessage});
     argos_tools::rag_memory_save_conversation("user", userMessage);
@@ -468,7 +503,7 @@ std::string AgentClientCore::chatStreaming(const std::string& userMessage, Strea
 
         if (!hasToolTags(finalResponse)) break;
 
-        std::string toolResults = executeTools(finalResponse);
+        std::string toolResults = executeTools(finalResponse, toolStatusCallback);
         m_history.push_back({"assistant", finalResponse});
         m_history.push_back({"system", "[Tool Results]\n" + toolResults});
         m_history.push_back({"user", "Based on the tool results above, give me a clear answer."});

@@ -11,6 +11,11 @@ import android.graphics.Color;
 import android.graphics.PixelFormat;
 import android.os.Build;
 import android.os.IBinder;
+import android.text.SpannableStringBuilder;
+import android.text.Spanned;
+import android.text.style.StyleSpan;
+import android.text.style.TypefaceSpan;
+import android.text.style.ForegroundColorSpan;
 import android.text.TextUtils;
 import android.util.DisplayMetrics;
 import android.view.Gravity;
@@ -402,10 +407,110 @@ public class FloatingRobotService extends Service implements SurfaceHolder.Callb
         android.os.Handler handler = new android.os.Handler(getMainLooper());
         handler.post(() -> {
             TextView tv = new TextView(this);
-            tv.setText(text);
+            // Parse basic markdown: **bold**, `code`, *italic*
+            CharSequence styled = parseMarkdown(text, color);
+            tv.setText(styled);
             tv.setTextColor(color);
             tv.setTextSize(15f);
             tv.setPadding(0, 12, 0, 12);
+            convoLayout.addView(tv);
+            convoScroll.post(() -> convoScroll.fullScroll(ScrollView.FOCUS_DOWN));
+        });
+    }
+
+    // Parse basic markdown into styled SpannableStringBuilder
+    private CharSequence parseMarkdown(String text, int baseColor) {
+        SpannableStringBuilder sb = new SpannableStringBuilder();
+        int i = 0;
+        while (i < text.length()) {
+            // **bold**
+            if (i + 1 < text.length() && text.charAt(i) == '*' && text.charAt(i + 1) == '*') {
+                int end = text.indexOf("**", i + 2);
+                if (end > 0) {
+                    String bold = text.substring(i + 2, end);
+                    int start = sb.length();
+                    sb.append(bold);
+                    sb.setSpan(new StyleSpan(android.graphics.Typeface.BOLD), start, sb.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                    i = end + 2;
+                    continue;
+                }
+            }
+            // `code`
+            if (text.charAt(i) == '`') {
+                int end = text.indexOf('`', i + 1);
+                if (end > 0) {
+                    String code = text.substring(i + 1, end);
+                    int start = sb.length();
+                    sb.append(code);
+                    sb.setSpan(new TypefaceSpan("monospace"), start, sb.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                    sb.setSpan(new ForegroundColorSpan(Color.rgb(120, 220, 120)), start, sb.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                    i = end + 1;
+                    continue;
+                }
+            }
+            // *italic* (single asterisk, not double)
+            if (text.charAt(i) == '*' && (i + 1 >= text.length() || text.charAt(i + 1) != '*')) {
+                int end = text.indexOf('*', i + 1);
+                if (end > 0 && text.charAt(end - 1) != '*') {
+                    String italic = text.substring(i + 1, end);
+                    int start = sb.length();
+                    sb.append(italic);
+                    sb.setSpan(new StyleSpan(android.graphics.Typeface.ITALIC), start, sb.length(), Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
+                    i = end + 1;
+                    continue;
+                }
+            }
+            sb.append(text.charAt(i));
+            i++;
+        }
+        return sb;
+    }
+
+    // Called from C++ via JNI — shows tool execution status in bubble
+    public void onToolStatus(final String status) {
+        android.os.Handler handler = new android.os.Handler(getMainLooper());
+        handler.post(() -> {
+            int count = convoLayout.getChildCount();
+            // Find existing tool status view
+            for (int i = count - 1; i >= 0; i--) {
+                View v = convoLayout.getChildAt(i);
+                if (v instanceof TextView) {
+                    TextView tv = (TextView) v;
+                    if (tv.getTag() != null && tv.getTag().equals("tool_status")) {
+                        // Update existing status
+                        tv.setText(status);
+                        convoScroll.post(() -> convoScroll.fullScroll(ScrollView.FOCUS_DOWN));
+                        return;
+                    }
+                }
+            }
+            // Create new tool status view
+            TextView tv = new TextView(this);
+            tv.setText(status);
+            tv.setTextColor(Color.rgb(255, 200, 80));
+            tv.setTextSize(13f);
+            tv.setPadding(0, 6, 0, 6);
+            tv.setTag("tool_status");
+            convoLayout.addView(tv);
+            convoScroll.post(() -> convoScroll.fullScroll(ScrollView.FOCUS_DOWN));
+        });
+    }
+
+    // Called from C++ via JNI — shows chat metrics (time, chars)
+    public void onChatMetrics(final String metrics) {
+        android.os.Handler handler = new android.os.Handler(getMainLooper());
+        handler.post(() -> {
+            // Parse metrics: "1234ms|567chars"
+            String[] parts = metrics.split("\\|");
+            String timeStr = parts.length > 0 ? parts[0] : "";
+            String charStr = parts.length > 1 ? parts[1] : "";
+
+            TextView tv = new TextView(this);
+            tv.setText("⏱ " + timeStr + "  📝 " + charStr);
+            tv.setTextColor(Color.rgb(100, 100, 120));
+            tv.setTextSize(11f);
+            tv.setPadding(0, 4, 0, 8);
+            tv.setTag("metrics");
             convoLayout.addView(tv);
             convoScroll.post(() -> convoScroll.fullScroll(ScrollView.FOCUS_DOWN));
         });
@@ -447,7 +552,24 @@ public class FloatingRobotService extends Service implements SurfaceHolder.Callb
         handler.post(() -> {
             chatInProgress = false;
             sendBtn.setEnabled(true);
-            addMessage("Argos: " + response, Color.rgb(100, 200, 255));
+            // Strip [TOOL:...] tags from displayed response
+            String clean = response.replaceAll("\\[TOOL:[^\\]]*\\]", "").trim();
+            // Remove tool status views
+            int count = convoLayout.getChildCount();
+            for (int i = count - 1; i >= 0; i--) {
+                View v = convoLayout.getChildAt(i);
+                if (v instanceof TextView) {
+                    TextView tv = (TextView) v;
+                    if (tv.getTag() != null && tv.getTag().equals("tool_status")) {
+                        convoLayout.removeViewAt(i);
+                    }
+                }
+            }
+            if (clean.isEmpty()) {
+                addMessage("Argos: (tool executed, see results above)", Color.rgb(100, 200, 255));
+            } else {
+                addMessage("Argos: " + clean, Color.rgb(100, 200, 255));
+            }
         });
     }
 

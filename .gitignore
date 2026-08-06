@@ -68,3 +68,7 @@ cpp/test_api_body.json
 cpp/test_api_stream.json
 aria_*.txt
 imgui.ini
+
+# Runtime config (contains API key — do not commit)
+argos_config.txt
+**/argos_config.txt

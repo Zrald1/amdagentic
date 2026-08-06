@@ -15,6 +15,7 @@ struct ChatMessageCore {
 
 using StreamCallbackCore = std::function<bool(const std::string& delta)>;
 using ThoughtsCallbackCore = std::function<void(const std::string& thoughts)>;
+using ToolStatusCallbackCore = std::function<void(const std::string& status)>;
 
 class AgentClientCore {
 public:
@@ -27,7 +28,8 @@ public:
 
     std::string chat(const std::string& userMessage);
     std::string chatStreaming(const std::string& userMessage, StreamCallbackCore callback,
-                              ThoughtsCallbackCore thoughtsCallback = nullptr);
+                              ThoughtsCallbackCore thoughtsCallback = nullptr,
+                              ToolStatusCallbackCore toolStatusCallback = nullptr);
 
     void clearHistory();
     std::atomic<bool> m_abort{false};
@@ -44,10 +46,11 @@ private:
     std::string buildJsonBody(const std::vector<ChatMessageCore>& messages, bool stream);
     std::string parseSSEChunk(const std::string& chunk, std::string* thoughts = nullptr);
     bool hasToolTags(const std::string& response);
-    std::string executeTools(const std::string& response);
+    std::string executeTools(const std::string& response, ToolStatusCallbackCore toolStatusCallback = nullptr);
     std::string stripToolTags(const std::string& response);
     std::string chatWithMessages(const std::vector<ChatMessageCore>& messages);
     std::string chatWithMessagesStreaming(const std::vector<ChatMessageCore>& messages,
                                            StreamCallbackCore callback,
-                                           ThoughtsCallbackCore thoughtsCallback = nullptr);
+                                           ThoughtsCallbackCore thoughtsCallback = nullptr,
+                                           ToolStatusCallbackCore toolStatusCallback = nullptr);
 };

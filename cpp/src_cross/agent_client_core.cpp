@@ -293,6 +293,11 @@ std::string AgentClientCore::chatWithMessagesStreaming(const std::vector<ChatMes
             return true;
         });
 
+    if (!rawResponse.empty() && rawResponse.find("[Error:") == 0) {
+        argos::log(("HTTP error in streaming: " + rawResponse.substr(0, 200)).c_str());
+        return rawResponse;
+    }
+
     if (fullResponse.empty()) {
         argos::log("Streaming response empty, falling back to non-streaming");
         return chatWithMessages(messages);

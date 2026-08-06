@@ -191,6 +191,9 @@ Java_com_argos_companion_FloatingRobotService_nativeInit(JNIEnv* env, jobject se
     // Set app data dir
     argos::setAppDataDir("/data/data/com.argos.companion/files");
 
+    // Set JNI for HTTP requests (uses Java HttpURLConnection for HTTPS support)
+    argos::setJniForHttp(g_jvm, g_service);
+
     // Start render thread
     g_running.store(true);
     g_paused.store(false);

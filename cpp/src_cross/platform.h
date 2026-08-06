@@ -24,6 +24,9 @@ void setAppDataDir(const char* dir);
 // Log a message (platform-specific: OutputDebugString, __android_log_print, etc.)
 void log(const char* message);
 
+// Set JNI environment for HTTP requests (Android only — uses Java HttpURLConnection for HTTPS)
+void setJniForHttp(void* jvm, void* service);
+
 // Get current time in milliseconds
 int64_t getTimeMs();
 

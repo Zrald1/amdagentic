@@ -31,7 +31,7 @@ public:
     std::atomic<bool> m_abort{false};
 
 private:
-    std::string m_serverUrl = "http://developer.amd.com.cn/radeon/api/v1";
+    std::string m_serverUrl = "https://developer.amd.com.cn/radeon/api/v1";
     std::string m_apiKey = "rc-c042ad0acc56669f7b46e70f924189b5ac51664ce329f5b2";
     std::string m_model = "DeepSeek-V4-Flash";
     std::string m_fallbackModel = "MiniCPM5-1B";

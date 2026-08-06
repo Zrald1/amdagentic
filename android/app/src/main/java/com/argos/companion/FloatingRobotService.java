@@ -518,6 +518,71 @@ public class FloatingRobotService extends Service implements SurfaceHolder.Callb
         return instance;
     }
 
+    // Called from C++ via JNI to perform HTTP POST (handles HTTPS automatically)
+    public String httpPostJava(String url, String headers, String body, boolean stream) {
+        try {
+            java.net.URL urlObj = new java.net.URL(url);
+            javax.net.ssl.HttpsURLConnection.setDefaultHostnameVerifier((hostname, session) -> true);
+            java.net.HttpURLConnection conn = (java.net.HttpURLConnection) urlObj.openConnection();
+            conn.setRequestMethod("POST");
+            conn.setRequestProperty("Content-Type", "application/json");
+            if (stream) {
+                conn.setRequestProperty("Accept", "text/event-stream");
+            }
+            // Parse custom headers
+            for (String line : headers.split("\r\n")) {
+                int colon = line.indexOf(':');
+                if (colon > 0) {
+                    String key = line.substring(0, colon).trim();
+                    String val = line.substring(colon + 1).trim();
+                    if (!key.isEmpty()) {
+                        conn.setRequestProperty(key, val);
+                    }
+                }
+            }
+            conn.setDoOutput(true);
+            conn.setConnectTimeout(30000);
+            conn.setReadTimeout(30000);
+            conn.setInstanceFollowRedirects(true);
+
+            // Send body
+            java.io.OutputStream os = conn.getOutputStream();
+            os.write(body.getBytes("UTF-8"));
+            os.flush();
+            os.close();
+
+            int status = conn.getResponseCode();
+            android.util.Log.i("Argos", "Java HTTP POST " + url + " -> " + status);
+
+            // Read response
+            java.io.InputStream is;
+            if (status >= 200 && status < 300) {
+                is = conn.getInputStream();
+            } else {
+                is = conn.getErrorStream();
+                if (is == null) is = conn.getInputStream();
+            }
+
+            java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
+            byte[] buf = new byte[8192];
+            int n;
+            while ((n = is.read(buf)) > 0) {
+                baos.write(buf, 0, n);
+            }
+            is.close();
+            conn.disconnect();
+
+            String response = new String(baos.toByteArray(), "UTF-8");
+            if (status < 200 || status >= 300) {
+                return "[Error: HTTP " + status + ": " + response.substring(0, Math.min(200, response.length())) + "]";
+            }
+            return response;
+        } catch (Exception e) {
+            android.util.Log.e("Argos", "Java HTTP error: " + e.getMessage());
+            return "[Error: " + e.getClass().getSimpleName() + ": " + e.getMessage() + "]";
+        }
+    }
+
     // Native methods
     private native void nativeInit(SurfaceView surfaceView, float screenWidth, float screenHeight);
     private native void nativeSendChat(String message);

@@ -1376,6 +1376,7 @@ static LRESULT CALLBACK BubbleWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
                     RefreshConversation(hwnd);
                     SetFocus(GetDlgItem(hwnd, IDC_BUBBLE_EDIT));
                     if (g_renderer) g_renderer->SetThinking(false);
+                    if (g_renderer) g_renderer->SetExecutingTools(false);
                     return 0;
                 }
 
@@ -1403,6 +1404,7 @@ static LRESULT CALLBACK BubbleWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             if (!streamedTextCopy.empty()) {
                 KillTimer(hwnd, IDT_LOADING);
                 if (g_renderer) g_renderer->SetThinking(false);
+                if (g_renderer) g_renderer->SetExecutingTools(false);
             }
             // Refresh conversation to show streaming text
             RefreshConversation(hwnd);
@@ -1428,6 +1430,7 @@ static LRESULT CALLBACK BubbleWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
 
             // Stop thinking animation
             if (g_renderer) g_renderer->SetThinking(false);
+            if (g_renderer) g_renderer->SetExecutingTools(false);
             return 0;
         }
         case WM_CHAT_ERROR: {
@@ -1438,6 +1441,7 @@ static LRESULT CALLBACK BubbleWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             if (g_agent && g_agent->m_abort.load()) {
                 // Just clear thinking state — new chat is already starting
                 if (g_renderer) g_renderer->SetThinking(false);
+                if (g_renderer) g_renderer->SetExecutingTools(false);
                 return 0;
             }
             std::wstring errResponse = g_pendingResponse;
@@ -1463,6 +1467,7 @@ static LRESULT CALLBACK BubbleWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             RefreshConversation(hwnd);
             SetFocus(GetDlgItem(hwnd, IDC_BUBBLE_EDIT));
             if (g_renderer) g_renderer->SetThinking(false);
+            if (g_renderer) g_renderer->SetExecutingTools(false);
             return 0;
         }
         case WM_VOICE_RESULT: {
@@ -1964,6 +1969,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         case WM_TIMER: {
             if (wParam == IDT_ANIMATE && g_renderer) {
                 g_renderer->Update();
+                // Sync tool execution state for lightning effect
+                if (g_agent) {
+                    g_renderer->SetExecutingTools(g_agent->m_executingTools.load());
+                }
                 g_renderer->Render();
 
                 // Keep manga bubble positioned above the robot

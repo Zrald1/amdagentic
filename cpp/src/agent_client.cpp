@@ -307,7 +307,9 @@ std::wstring AgentClient::Chat(const std::wstring& userMessage) {
         }
 
         // Execute the tools and collect results
+        m_executingTools.store(true);
         std::wstring toolResults = ExecuteTools(response);
+        m_executingTools.store(false);
 
         // Show the user what Argos is doing (clean text without tool tags)
         std::wstring cleanResponse = StripToolTags(response);
@@ -779,7 +781,9 @@ std::wstring AgentClient::ChatStreaming(const std::wstring& userMessage, StreamC
             break;
         }
 
+        m_executingTools.store(true);
         std::wstring toolResults = ExecuteTools(finalResponse);
+        m_executingTools.store(false);
         LogError("Tool results: " + WideToUtf8(toolResults.substr(0, 200)));
         m_history.push_back({L"assistant", finalResponse});
 

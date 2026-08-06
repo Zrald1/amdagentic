@@ -1109,6 +1109,260 @@ void RobotRenderer::DrawElectricArc(float cx, float neckY, float bodyY) {
     m_brushElectric->SetOpacity(1.0f);
 }
 
+// Electric lightning effect around the entire robot body when executing tools.
+// Multiple jagged bolts flicker around the silhouette at random angles.
+void RobotRenderer::DrawToolLightning(float cx, float cy, float bob) {
+    float t = m_animTime;
+    float centerY = cy + bob;
+
+    // Body bounding radius (approximate)
+    float bodyW = 42.0f;
+    float bodyH = 70.0f;
+
+    // Draw 8 lightning bolts at different angles around the body
+    for (int bolt = 0; bolt < 8; bolt++) {
+        float angle = (bolt / 8.0f) * 2.0f * (float)M_PI + t * 0.5f;
+        float phase = t * 12.0f * (float)M_PI + bolt * 1.7f;
+
+        // Flicker — bolt appears/disappears rapidly
+        float flicker = sinf(phase + t * 20.0f);
+        if (flicker < -0.2f) continue;
+
+        float alpha = 0.4f + 0.6f * flicker;
+
+        // Start point: just outside body silhouette
+        float startR = bodyW + 4.0f;
+        float sx = cx + startR * cosf(angle);
+        float sy = centerY + startR * 0.7f * sinf(angle);
+
+        // End point: further out, jagged path
+        float endR = bodyW + 18.0f + 6.0f * sinf(phase * 1.3f);
+        float ex = cx + endR * cosf(angle);
+        float ey = centerY + endR * 0.7f * sinf(angle);
+
+        // Build jagged lightning path
+        ComPtr<ID2D1PathGeometry> geo;
+        m_factory->CreatePathGeometry(geo.GetAddressOf());
+        ComPtr<ID2D1GeometrySink> sink;
+        geo->Open(sink.GetAddressOf());
+
+        int numSegments = 4;
+        sink->BeginFigure(D2D1::Point2F(sx, sy), D2D1_FIGURE_BEGIN_HOLLOW);
+
+        for (int i = 1; i <= numSegments; i++) {
+            float progress = (float)i / numSegments;
+            // Interpolate from start to end
+            float baseX = sx + (ex - sx) * progress;
+            float baseY = sy + (ey - sy) * progress;
+            // Perpendicular jag offset
+            float perpX = -(ey - sy);
+            float perpY = (ex - sx);
+            float perpLen = sqrtf(perpX * perpX + perpY * perpY) + 0.001f;
+            perpX /= perpLen;
+            perpY /= perpLen;
+            float jag = sinf(phase + i * 2.3f) * 5.0f + sinf(phase * 1.7f + i * 4.1f) * 3.0f;
+            if (i == numSegments) jag = 0; // converge at end
+            sink->AddLine(D2D1::Point2F(baseX + perpX * jag, baseY + perpY * jag));
+        }
+
+        sink->EndFigure(D2D1_FIGURE_END_OPEN);
+        sink->Close();
+
+        // Draw glow layer then sharp core
+        m_brushElectric->SetOpacity(alpha * 0.25f);
+        m_target->DrawGeometry(geo.Get(), m_brushElectric.Get(), 4.0f);
+        m_brushElectric->SetOpacity(alpha);
+        m_target->DrawGeometry(geo.Get(), m_brushElectric.Get(), 1.5f);
+
+        // Spark dot at the outer endpoint
+        D2D1_ELLIPSE spark = D2D1::Ellipse(D2D1::Point2F(ex, ey), 2.0f, 2.0f);
+        m_brushElectric->SetOpacity(alpha);
+        m_target->FillEllipse(spark, m_brushElectric.Get());
+    }
+
+    // Additional crackling sparks around the body
+    for (int i = 0; i < 6; i++) {
+        float sparkPhase = t * 15.0f * (float)M_PI + i * 1.9f;
+        float sparkFlicker = sinf(sparkPhase + t * 25.0f);
+        if (sparkFlicker < 0.3f) continue;
+
+        float sparkAngle = i * 1.04f + t * 0.8f;
+        float sparkR = bodyW + 8.0f + 4.0f * sinf(sparkPhase * 2.0f);
+        float spX = cx + sparkR * cosf(sparkAngle);
+        float spY = centerY + sparkR * 0.7f * sinf(sparkAngle);
+
+        float alpha = 0.5f + 0.5f * sparkFlicker;
+        m_brushElectric->SetOpacity(alpha);
+        D2D1_ELLIPSE spark = D2D1::Ellipse(D2D1::Point2F(spX, spY), 1.5f, 1.5f);
+        m_target->FillEllipse(spark, m_brushElectric.Get());
+    }
+
+    m_brushElectric->SetOpacity(1.0f);
+}
+
+// Shield on the left arm — a golden Spartan aspis (round shield)
+void RobotRenderer::DrawShield(float cx, float cy, float bob, float leanDeg, float squashX) {
+    float bodyHalfW = 32.0f;
+    float gap = -4.0f;
+    float shieldR = 20.0f;
+    float restX = cx + (-1.0f) * (bodyHalfW + gap + shieldR * 0.6f);
+    float restY = cy + 10.0f + bob;
+
+    bool transformed = fabsf(leanDeg) > 0.01f || fabsf(squashX - 1.0f) > 0.001f;
+    D2D1_POINT_2F pivot = D2D1::Point2F(cx - bodyHalfW * 0.5f, cy - 18 + bob);
+    if (transformed) {
+        D2D1::Matrix3x2F squash = D2D1::Matrix3x2F::Scale(D2D1::SizeF(squashX, 1.0f), pivot);
+        D2D1::Matrix3x2F rot = D2D1::Matrix3x2F::Rotation(leanDeg, pivot);
+        m_target->SetTransform(squash * rot);
+    }
+
+    // Shield outer rim — dark gold
+    D2D1_ELLIPSE outer = D2D1::Ellipse(D2D1::Point2F(restX, restY), shieldR, shieldR);
+    m_target->FillEllipse(outer, m_brushGoldDark.Get());
+
+    // Shield main body — gold
+    D2D1_ELLIPSE main = D2D1::Ellipse(D2D1::Point2F(restX, restY), shieldR - 2.5f, shieldR - 2.5f);
+    m_target->FillEllipse(main, m_brushGold.Get());
+
+    // Shield mid shade
+    D2D1_ELLIPSE mid = D2D1::Ellipse(D2D1::Point2F(restX + 2.0f, restY + 2.0f), shieldR - 5.0f, shieldR - 5.0f);
+    m_target->FillEllipse(mid, m_brushGoldMid.Get());
+
+    // Shield highlight
+    D2D1_ELLIPSE hl = D2D1::Ellipse(D2D1::Point2F(restX - 4.0f, restY - 5.0f), shieldR - 10.0f, shieldR - 10.0f);
+    m_target->FillEllipse(hl, m_brushGoldLight.Get());
+
+    // Shield boss (center stud) — neon blue
+    D2D1_ELLIPSE boss = D2D1::Ellipse(D2D1::Point2F(restX, restY), 5.0f, 5.0f);
+    m_target->FillEllipse(boss, m_brushNeon.Get());
+    D2D1_ELLIPSE bossInner = D2D1::Ellipse(D2D1::Point2F(restX, restY), 3.0f, 3.0f);
+    m_target->FillEllipse(bossInner, m_brushNeonBright.Get());
+
+    // Lambda symbol (Spartan) in center — simple inverted V
+    ComPtr<ID2D1PathGeometry> lambdaGeo;
+    m_factory->CreatePathGeometry(lambdaGeo.GetAddressOf());
+    ComPtr<ID2D1GeometrySink> lambdaSink;
+    lambdaGeo->Open(lambdaSink.GetAddressOf());
+    lambdaSink->BeginFigure(D2D1::Point2F(restX - 6, restY + 6), D2D1_FIGURE_BEGIN_HOLLOW);
+    lambdaSink->AddLine(D2D1::Point2F(restX, restY - 5));
+    lambdaSink->AddLine(D2D1::Point2F(restX + 6, restY + 6));
+    lambdaSink->EndFigure(D2D1_FIGURE_END_OPEN);
+    lambdaSink->Close();
+    m_brushNeonBright->SetOpacity(0.8f);
+    m_target->DrawGeometry(lambdaGeo.Get(), m_brushNeonBright.Get(), 1.5f);
+    m_brushNeonBright->SetOpacity(1.0f);
+
+    if (transformed) {
+        m_target->SetTransform(D2D1::Matrix3x2F::Identity());
+    }
+
+    // Shoulder joint
+    float shoulderX = cx - (bodyHalfW - 2.0f);
+    float shoulderY = cy - 18 + bob;
+    D2D1_ELLIPSE shoulder = D2D1::Ellipse(D2D1::Point2F(shoulderX, shoulderY), 4.5f, 4.5f);
+    m_target->FillEllipse(shoulder, m_brushNeon.Get());
+    D2D1_ELLIPSE shoulderInner = D2D1::Ellipse(D2D1::Point2F(shoulderX, shoulderY), 2.5f, 2.5f);
+    m_target->FillEllipse(shoulderInner, m_brushNeonBright.Get());
+}
+
+// Sword on the right arm — a golden Spartan xiphos (short sword)
+void RobotRenderer::DrawSword(float cx, float cy, float bob, bool waving, float waveAngle,
+                               float leanDeg, float dislocate, float squashX) {
+    float bodyHalfW = 32.0f;
+    float gap = -4.0f;
+    float armHalfW = 7.0f;
+    float restX = cx + (1.0f) * (bodyHalfW + gap + armHalfW);
+    float restY = cy + 6.0f + bob;
+
+    // Pop outward when dislocated (waving)
+    float baseX = restX + 16.0f * dislocate;
+    float baseY = restY - 12.0f * dislocate;
+
+    float angleDeg = 0.0f;
+    if (waving) angleDeg += 34.0f * sinf(waveAngle);
+    angleDeg += leanDeg;
+
+    bool transformed = fabsf(angleDeg) > 0.01f || fabsf(squashX - 1.0f) > 0.001f;
+    D2D1_POINT_2F pivot = D2D1::Point2F(cx + bodyHalfW * 0.5f, cy - 18 + bob);
+    if (transformed) {
+        D2D1::Matrix3x2F squash = D2D1::Matrix3x2F::Scale(D2D1::SizeF(squashX, 1.0f), pivot);
+        D2D1::Matrix3x2F rot = D2D1::Matrix3x2F::Rotation(angleDeg, pivot);
+        m_target->SetTransform(squash * rot);
+    }
+
+    // Short arm stub (golden, matching body)
+    D2D1_ELLIPSE arm = D2D1::Ellipse(D2D1::Point2F(baseX, baseY), armHalfW, 16.0f);
+    m_target->FillEllipse(arm, m_brushWhite.Get());
+    D2D1_ELLIPSE armShade = D2D1::Ellipse(D2D1::Point2F(baseX + 2.0f, baseY), armHalfW - 2.0f, 12.0f);
+    m_target->FillEllipse(armShade, m_brushWhiteMid.Get());
+
+    // Sword handle — dark gold
+    float handleTopY = baseY - 16.0f;
+    float handleBotY = baseY - 6.0f;
+    D2D1_RECT_F handle = D2D1::RectF(baseX - 2.5f, handleTopY, baseX + 2.5f, handleBotY);
+    m_target->FillRectangle(handle, m_brushGoldDark.Get());
+
+    // Sword guard (crossbar) — gold
+    D2D1_RECT_F guard = D2D1::RectF(baseX - 7.0f, handleTopY - 2.0f, baseX + 7.0f, handleTopY + 2.0f);
+    m_target->FillRectangle(guard, m_brushGold.Get());
+
+    // Sword pommel — gold sphere
+    D2D1_ELLIPSE pommel = D2D1::Ellipse(D2D1::Point2F(baseX, handleBotY + 2.0f), 3.0f, 3.0f);
+    m_target->FillEllipse(pommel, m_brushGold.Get());
+
+    // Sword blade — pointed xiphos shape
+    float bladeTopY = handleTopY - 2.0f;
+    float bladeLen = 26.0f;
+    ComPtr<ID2D1PathGeometry> bladeGeo;
+    m_factory->CreatePathGeometry(bladeGeo.GetAddressOf());
+    ComPtr<ID2D1GeometrySink> bladeSink;
+    bladeGeo->Open(bladeSink.GetAddressOf());
+    bladeSink->BeginFigure(D2D1::Point2F(baseX - 3.0f, bladeTopY), D2D1_FIGURE_BEGIN_FILLED);
+    bladeSink->AddLine(D2D1::Point2F(baseX + 3.0f, bladeTopY));
+    bladeSink->AddLine(D2D1::Point2F(baseX, bladeTopY - bladeLen)); // pointed tip
+    bladeSink->EndFigure(D2D1_FIGURE_END_CLOSED);
+    bladeSink->Close();
+    m_target->FillGeometry(bladeGeo.Get(), m_brushWhiteLight.Get(), nullptr);
+
+    // Blade mid shade
+    ComPtr<ID2D1PathGeometry> bladeMidGeo;
+    m_factory->CreatePathGeometry(bladeMidGeo.GetAddressOf());
+    ComPtr<ID2D1GeometrySink> bladeMidSink;
+    bladeMidGeo->Open(bladeMidSink.GetAddressOf());
+    bladeMidSink->BeginFigure(D2D1::Point2F(baseX + 0.5f, bladeTopY), D2D1_FIGURE_BEGIN_FILLED);
+    bladeMidSink->AddLine(D2D1::Point2F(baseX + 3.0f, bladeTopY));
+    bladeMidSink->AddLine(D2D1::Point2F(baseX, bladeTopY - bladeLen));
+    bladeMidSink->EndFigure(D2D1_FIGURE_END_CLOSED);
+    bladeMidSink->Close();
+    m_target->FillGeometry(bladeMidGeo.Get(), m_brushWhiteMid.Get(), nullptr);
+
+    // Blade outline
+    m_target->DrawGeometry(bladeGeo.Get(), m_brushGoldDark.Get(), 0.8f);
+
+    // Blade center ridge line
+    ComPtr<ID2D1PathGeometry> ridgeGeo;
+    m_factory->CreatePathGeometry(ridgeGeo.GetAddressOf());
+    ComPtr<ID2D1GeometrySink> ridgeSink;
+    ridgeGeo->Open(ridgeSink.GetAddressOf());
+    ridgeSink->BeginFigure(D2D1::Point2F(baseX, bladeTopY), D2D1_FIGURE_BEGIN_HOLLOW);
+    ridgeSink->AddLine(D2D1::Point2F(baseX, bladeTopY - bladeLen));
+    ridgeSink->EndFigure(D2D1_FIGURE_END_OPEN);
+    ridgeSink->Close();
+    m_target->DrawGeometry(ridgeGeo.Get(), m_brushGoldLight.Get(), 0.5f);
+
+    if (transformed) {
+        m_target->SetTransform(D2D1::Matrix3x2F::Identity());
+    }
+
+    // Shoulder joint
+    float shoulderX = cx + (bodyHalfW - 2.0f);
+    float shoulderY = cy - 18 + bob;
+    D2D1_ELLIPSE shoulder = D2D1::Ellipse(D2D1::Point2F(shoulderX, shoulderY), 4.5f, 4.5f);
+    m_target->FillEllipse(shoulder, m_brushNeon.Get());
+    D2D1_ELLIPSE shoulderInner = D2D1::Ellipse(D2D1::Point2F(shoulderX, shoulderY), 2.5f, 2.5f);
+    m_target->FillEllipse(shoulderInner, m_brushNeonBright.Get());
+}
+
 void RobotRenderer::DrawRobot() {
     D2D1_SIZE_F size = m_target->GetSize();
     float cx = size.width / 2;
@@ -1127,8 +1381,8 @@ void RobotRenderer::DrawRobot() {
         DrawElectricArc(cx, dHeadY + 22, cy + dBob - 44);
         DrawHead(cx, dHeadY, EyeExpression::Surprised, false, 0.0f, false);
         DrawSpartanCrest(cx, dHeadY);
-        DrawArm(cx, cy, dBob, true, false, 0);
-        DrawArm(cx, cy, dBob, false, false, 0);
+        DrawShield(cx, cy, dBob);
+        DrawSword(cx, cy, dBob);
         return;
     }
 
@@ -1141,8 +1395,8 @@ void RobotRenderer::DrawRobot() {
             DrawElectricArc(cx, headY + 22, cy + bob - 44);
             DrawHead(cx, headY, m_eyeExpression, false);
             DrawSpartanCrest(cx, headY);
-            DrawArm(cx, cy, bob, true, false, 0);
-            DrawArm(cx, cy, bob, false, false, 0);
+            DrawShield(cx, cy, bob);
+            DrawSword(cx, cy, bob);
             DrawPlantSymbol(cx, cy + bob);
             break;
         }
@@ -1198,8 +1452,8 @@ void RobotRenderer::DrawRobot() {
             // just a tilt, sweeping backward as she turns to look ahead.
             float armLean = leanDeg * 1.15f;
             float armScaleX = 1.0f - 0.22f * turnAmount;
-            DrawArm(cx, cy, gBob, true, false, 0, armLean, 0.0f, armScaleX);
-            DrawArm(cx, cy, gBob, false, false, 0, armLean, 0.0f, armScaleX);
+            DrawShield(cx, cy, gBob, armLean, armScaleX);
+            DrawSword(cx, cy, gBob, false, 0.0f, armLean, 0.0f, armScaleX);
             break;
         }
         case RobotState::Greeting: {
@@ -1224,8 +1478,8 @@ void RobotRenderer::DrawRobot() {
                 dislocate = 1.0f;
             }
 
-            DrawArm(cx, cy, bob, true, false, 0);
-            DrawArm(cx, cy, bob, false, true, waveAngle, 0.0f, dislocate);
+            DrawShield(cx, cy, bob);
+            DrawSword(cx, cy, bob, true, waveAngle, 0.0f, dislocate);
             DrawPlantSymbol(cx, cy + bob);
             break;
         }
@@ -1239,8 +1493,8 @@ void RobotRenderer::DrawRobot() {
             DrawElectricArc(cx, wHeadY + 22, cy + wBob - 44);
             DrawHead(cx, wHeadY, EyeExpression::Curious, false);
             DrawSpartanCrest(cx, wHeadY);
-            DrawArm(cx, cy - 10 + wBob, wBob, true, false, 0);
-            DrawArm(cx, cy - 10 + wBob, wBob, false, false, 0);
+            DrawShield(cx, cy - 10 + wBob, wBob);
+            DrawSword(cx, cy - 10 + wBob, wBob);
             DrawPlantSymbol(cx, cy + wBob);
             break;
         }
@@ -1254,8 +1508,8 @@ void RobotRenderer::DrawRobot() {
             DrawElectricArc(cx, cHeadY + 22, cy + cBob - 44);
             DrawHead(cx, cHeadY, EyeExpression::Happy, false);
             DrawSpartanCrest(cx, cHeadY);
-            DrawArm(cx, cy - 10 + cBob, cBob, true, false, 0);
-            DrawArm(cx, cy - 10 + cBob, cBob, false, false, 0);
+            DrawShield(cx, cy - 10 + cBob, cBob);
+            DrawSword(cx, cy - 10 + cBob, cBob);
             DrawPlantSymbol(cx, cy + cBob);
             for (int i = 0; i < 6; i++) {
                 float angle = (i / 6.0f) * 2.0f * (float)M_PI + t * 2;
@@ -1276,10 +1530,15 @@ void RobotRenderer::DrawRobot() {
             DrawElectricArc(cx, sHeadY + 22, cy + sBob - 44);
             DrawHead(cx, sHeadY, EyeExpression::Neutral, true);
             DrawSpartanCrest(cx, sHeadY);
-            DrawArm(cx, cy, sBob, true, false, 0);
-            DrawArm(cx, cy, sBob, false, false, 0);
+            DrawShield(cx, cy, sBob);
+            DrawSword(cx, cy, sBob);
             break;
         }
+    }
+
+    // Tool execution lightning effect: electric bolts around body
+    if (m_executingTools) {
+        DrawToolLightning(cx, cy, bob);
     }
 
     // Thinking overlay: floating dots above head while AI is processing

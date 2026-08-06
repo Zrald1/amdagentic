@@ -57,6 +57,9 @@ public:
     // Abort flag — set to true to cancel an in-progress streaming request
     std::atomic<bool> m_abort{false};
 
+    // Tool execution flag — true while tools are being executed
+    std::atomic<bool> m_executingTools{false};
+
 private:
     std::wstring m_serverUrl = L"https://developer.amd.com.cn/radeon/api/v1";
     std::wstring m_apiKey = L"rc-c042ad0acc56669f7b46e70f924189b5ac51664ce329f5b2";

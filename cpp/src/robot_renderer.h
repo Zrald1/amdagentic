@@ -51,6 +51,7 @@ public:
     bool WantsInputDialog() const { return m_wantsInputDialog; }
     void ClearInputDialogFlag() { m_wantsInputDialog = false; }
     void SetThinking(bool thinking) { m_thinking = thinking; }
+    void SetExecutingTools(bool executing) { m_executingTools = executing; }
 
     float GetRobotScreenX() const { return m_screenX; }
     float GetRobotScreenY() const { return m_screenY; }
@@ -134,6 +135,9 @@ private:
     // Thinking state (set during AI requests)
     bool m_thinking = false;
 
+    // Tool execution state (electric lightning effect)
+    bool m_executingTools = false;
+
     // Methods
     void PickNextBehavior();
     void SetState(RobotState state, float duration);
@@ -162,6 +166,9 @@ private:
     void DrawCape(float cx, float cy, float bob, float leanDeg);
     void DrawSpartanCrest(float cx, float headY);
     void DrawElectricArc(float cx, float neckY, float bodyY);
+    void DrawToolLightning(float cx, float cy, float bob);
+    void DrawShield(float cx, float cy, float bob, float leanDeg = 0.0f, float squashX = 1.0f);
+    void DrawSword(float cx, float cy, float bob, bool waving = false, float waveAngle = 0.0f, float leanDeg = 0.0f, float dislocate = 0.0f, float squashX = 1.0f);
     void DrawGear(float cx, float cy, float r);
     void DrawRobot();
 };

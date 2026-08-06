@@ -213,8 +213,9 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
     @Override
     public void surfaceDestroyed(SurfaceHolder holder) {
         nativeReady = false;
-        // Pause rendering when surface is destroyed
-        nativePause();
+        // Stop render thread and release EGL resources
+        // nativeInit will be called again when surface is recreated
+        nativeDestroy();
     }
 
     // Native methods

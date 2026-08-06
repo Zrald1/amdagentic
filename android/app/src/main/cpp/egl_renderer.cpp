@@ -243,12 +243,7 @@ void EglRenderer::drawRoundRect(float x, float y, float w, float h, float radius
 
 void EglRenderer::render() {
     if (m_eglSurface == EGL_NO_SURFACE) return;
-
-    glClearColor(0.05f, 0.05f, 0.08f, 1.0f);
-    glClear(GL_COLOR_BUFFER_BIT);
-
-    // Robot rendering is handled by RobotGles which calls our draw functions
-    // This is called from native_main.cpp after robot render
-
+    // Only swap — clearing and drawing are handled by the render loop
+    // and RobotGles before this call
     eglSwapBuffers(m_eglDisplay, m_eglSurface);
 }

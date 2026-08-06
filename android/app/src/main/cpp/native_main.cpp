@@ -75,10 +75,19 @@ static void renderLoop() {
 
     auto lastTime = std::chrono::high_resolution_clock::now();
 
-    while (g_running.load() && !g_paused.load()) {
+    while (g_running.load()) {
+        if (g_paused.load()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            lastTime = std::chrono::high_resolution_clock::now();
+            continue;
+        }
+
         auto now = std::chrono::high_resolution_clock::now();
         float dt = std::chrono::duration<float>(now - lastTime).count();
         lastTime = now;
+
+        // Cap dt to prevent huge jumps after pause
+        if (dt > 0.1f) dt = 0.016f;
 
         g_robot.update(dt);
 
@@ -102,7 +111,22 @@ Java_com_argos_companion_MainActivity_nativeInit(JNIEnv* env, jobject activity, 
     LOGI("nativeInit");
 
     env->GetJavaVM(&g_jvm);
+    if (g_activity) {
+        env->DeleteGlobalRef(g_activity);
+    }
     g_activity = env->NewGlobalRef(activity);
+
+    // Stop any existing render thread before starting a new one
+    g_running.store(false);
+    if (g_renderThread.joinable()) {
+        g_renderThread.join();
+    }
+
+    // Release old window if any
+    if (g_window) {
+        ANativeWindow_release(g_window);
+        g_window = nullptr;
+    }
 
     // Get Surface from SurfaceView
     jclass svClass = env->GetObjectClass(surfaceView);
@@ -110,6 +134,7 @@ Java_com_argos_companion_MainActivity_nativeInit(JNIEnv* env, jobject activity, 
     jobject holder = env->CallObjectMethod(surfaceView, getHolder);
     if (!holder) {
         LOGE("SurfaceHolder is null — surface not ready yet");
+        env->DeleteLocalRef(svClass);
         return;
     }
     jclass holderClass = env->GetObjectClass(holder);

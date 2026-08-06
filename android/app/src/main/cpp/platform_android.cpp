@@ -413,4 +413,123 @@ std::string replyToNotificationByIdx(int index, const std::string& message) {
     return callJavaIntStringMethod("replyToNotificationJava", "(ILjava/lang/String;)Ljava/lang/String;", index, message);
 }
 
+// ── Gesture-based UI automation JNI implementations ──
+
+// Helper for calling Java methods with 2 int args returning String
+static std::string callJavaTwoIntMethod(const char* methodName, const char* sig, int arg1, int arg2) {
+    if (!s_jvm || !s_service) return "{\"error\":\"JNI not initialized\"}";
+    JNIEnv* env = nullptr;
+    bool attached = false;
+    if (s_jvm->GetEnv((void**)&env, JNI_VERSION_1_6) != JNI_OK) {
+        s_jvm->AttachCurrentThread(&env, nullptr);
+        attached = true;
+    }
+    if (!env) return "{\"error\":\"Failed to get JNIEnv\"}";
+
+    jclass cls = env->GetObjectClass(s_service);
+    if (!cls) { if (attached) s_jvm->DetachCurrentThread(); return "{\"error\":\"No class\"}"; }
+    jmethodID mid = env->GetMethodID(cls, methodName, sig);
+    if (!mid) {
+        env->DeleteLocalRef(cls);
+        if (attached) s_jvm->DetachCurrentThread();
+        return "{\"error\":\"Method not found: " + std::string(methodName) + "\"}";
+    }
+
+    jstring jresult = (jstring) env->CallObjectMethod(s_service, mid, (jint)arg1, (jint)arg2);
+
+    std::string result;
+    if (jresult) {
+        const char* chars = env->GetStringUTFChars(jresult, nullptr);
+        if (chars) { result = chars; env->ReleaseStringUTFChars(jresult, chars); }
+        env->DeleteLocalRef(jresult);
+    }
+    env->DeleteLocalRef(cls);
+
+    if (env->ExceptionCheck()) { env->ExceptionDescribe(); env->ExceptionClear(); }
+    if (attached) s_jvm->DetachCurrentThread();
+    return result;
+}
+
+// Helper for calling Java methods with 5 int args returning String
+static std::string callJavaFiveIntMethod(const char* methodName, const char* sig,
+                                          int a1, int a2, int a3, int a4, int a5) {
+    if (!s_jvm || !s_service) return "{\"error\":\"JNI not initialized\"}";
+    JNIEnv* env = nullptr;
+    bool attached = false;
+    if (s_jvm->GetEnv((void**)&env, JNI_VERSION_1_6) != JNI_OK) {
+        s_jvm->AttachCurrentThread(&env, nullptr);
+        attached = true;
+    }
+    if (!env) return "{\"error\":\"Failed to get JNIEnv\"}";
+
+    jclass cls = env->GetObjectClass(s_service);
+    if (!cls) { if (attached) s_jvm->DetachCurrentThread(); return "{\"error\":\"No class\"}"; }
+    jmethodID mid = env->GetMethodID(cls, methodName, sig);
+    if (!mid) {
+        env->DeleteLocalRef(cls);
+        if (attached) s_jvm->DetachCurrentThread();
+        return "{\"error\":\"Method not found: " + std::string(methodName) + "\"}";
+    }
+
+    jstring jresult = (jstring) env->CallObjectMethod(s_service, mid,
+        (jint)a1, (jint)a2, (jint)a3, (jint)a4, (jint)a5);
+
+    std::string result;
+    if (jresult) {
+        const char* chars = env->GetStringUTFChars(jresult, nullptr);
+        if (chars) { result = chars; env->ReleaseStringUTFChars(jresult, chars); }
+        env->DeleteLocalRef(jresult);
+    }
+    env->DeleteLocalRef(cls);
+
+    if (env->ExceptionCheck()) { env->ExceptionDescribe(); env->ExceptionClear(); }
+    if (attached) s_jvm->DetachCurrentThread();
+    return result;
+}
+
+std::string clickAtPoint(int x, int y) {
+    LOGI("clickAtPoint: %d,%d", x, y);
+    return callJavaTwoIntMethod("clickAtPointJava", "(II)Ljava/lang/String;", x, y);
+}
+
+std::string longPressAtPoint(int x, int y) {
+    LOGI("longPressAtPoint: %d,%d", x, y);
+    return callJavaTwoIntMethod("longPressAtPointJava", "(II)Ljava/lang/String;", x, y);
+}
+
+std::string swipeGesture(int x1, int y1, int x2, int y2, int durationMs) {
+    LOGI("swipeGesture: %d,%d -> %d,%d dur=%d", x1, y1, x2, y2, durationMs);
+    return callJavaFiveIntMethod("swipeJava", "(IIIII)Ljava/lang/String;", x1, y1, x2, y2, durationMs);
+}
+
+std::string swipeUp() {
+    LOGI("swipeUp");
+    return callJavaNoArgMethod("swipeUpJava", "()Ljava/lang/String;");
+}
+
+std::string swipeDown() {
+    LOGI("swipeDown");
+    return callJavaNoArgMethod("swipeDownJava", "()Ljava/lang/String;");
+}
+
+std::string smartClick(int x, int y) {
+    LOGI("smartClick: %d,%d", x, y);
+    return callJavaTwoIntMethod("smartClickJava", "(II)Ljava/lang/String;", x, y);
+}
+
+std::string smartLongPress(int x, int y) {
+    LOGI("smartLongPress: %d,%d", x, y);
+    return callJavaTwoIntMethod("smartLongPressJava", "(II)Ljava/lang/String;", x, y);
+}
+
+std::string getClickableElements() {
+    LOGI("getClickableElements");
+    return callJavaNoArgMethod("getClickableElementsJava", "()Ljava/lang/String;");
+}
+
+std::string getScreenSize() {
+    LOGI("getScreenSize");
+    return callJavaNoArgMethod("getScreenSizeJava", "()Ljava/lang/String;");
+}
+
 } // namespace argos

@@ -680,6 +680,9 @@ public class ArgosAccessibilityService extends AccessibilityService {
             return "{\"error\":\"Element not found (id=" + elementId + "). Run ui_inspect first.\"}";
         }
 
+        // Refresh the node to get the latest state (nodes become stale after UI changes)
+        node.refresh();
+
         // Find clickable parent if the node itself isn't clickable
         AccessibilityNodeInfo target = node;
         if (!node.isClickable() && ("click".equals(action) || "long_click".equals(action))) {
@@ -947,5 +950,319 @@ public class ArgosAccessibilityService extends AccessibilityService {
             }
         }
         return null;
+    }
+
+    // ── Gesture-based actions (dispatchGesture) ──
+    // These work on ANY screen coordinate, even for apps with no accessibility nodes (canvas, games, etc.)
+
+    // Tap (click) at a specific screen coordinate
+    public String clickAtPoint(int x, int y) {
+        try {
+            android.graphics.Path path = new android.graphics.Path();
+            path.moveTo(x, y);
+            path.lineTo(x + 1, y); // non-zero path required
+
+            android.accessibilityservice.GestureDescription.StrokeDescription stroke =
+                new android.accessibilityservice.GestureDescription.StrokeDescription(path, 0, 50);
+            android.accessibilityservice.GestureDescription.Builder builder =
+                new android.accessibilityservice.GestureDescription.Builder();
+            builder.addStroke(stroke);
+
+            final boolean[] completed = {false};
+            final java.util.concurrent.CountDownLatch latch = new java.util.concurrent.CountDownLatch(1);
+
+            dispatchGesture(builder.build(), new GestureResultCallback() {
+                @Override
+                public void onCompleted(android.accessibilityservice.GestureDescription gesture) {
+                    completed[0] = true;
+                    latch.countDown();
+                }
+                @Override
+                public void onCancelled(android.accessibilityservice.GestureDescription gesture) {
+                    latch.countDown();
+                }
+            }, new android.os.Handler(getMainLooper()));
+
+            latch.await(2, java.util.concurrent.TimeUnit.SECONDS);
+
+            if (completed[0]) {
+                return "{\"status\":\"tapped\",\"x\":" + x + ",\"y\":" + y + "}";
+            }
+            return "{\"error\":\"tap gesture cancelled at (" + x + "," + y + ")\"}";
+        } catch (Exception e) {
+            return "{\"error\":\"tap failed: " + escapeJson(e.getMessage()) + "\"}";
+        }
+    }
+
+    // Long press at a specific screen coordinate
+    public String longPressAtPoint(int x, int y) {
+        try {
+            android.graphics.Path path = new android.graphics.Path();
+            path.moveTo(x, y);
+            path.lineTo(x + 1, y);
+
+            // Long press duration: 3x the system long press timeout
+            int longPressTime = android.view.ViewConfiguration.getLongPressTimeout() * 3;
+
+            android.accessibilityservice.GestureDescription.StrokeDescription stroke =
+                new android.accessibilityservice.GestureDescription.StrokeDescription(path, 0, longPressTime);
+            android.accessibilityservice.GestureDescription.Builder builder =
+                new android.accessibilityservice.GestureDescription.Builder();
+            builder.addStroke(stroke);
+
+            final boolean[] completed = {false};
+            final java.util.concurrent.CountDownLatch latch = new java.util.concurrent.CountDownLatch(1);
+
+            dispatchGesture(builder.build(), new GestureResultCallback() {
+                @Override
+                public void onCompleted(android.accessibilityservice.GestureDescription gesture) {
+                    completed[0] = true;
+                    latch.countDown();
+                }
+                @Override
+                public void onCancelled(android.accessibilityservice.GestureDescription gesture) {
+                    latch.countDown();
+                }
+            }, new android.os.Handler(getMainLooper()));
+
+            latch.await(longPressTime + 2000, java.util.concurrent.TimeUnit.MILLISECONDS);
+
+            if (completed[0]) {
+                return "{\"status\":\"long_pressed\",\"x\":" + x + ",\"y\":" + y + "}";
+            }
+            return "{\"error\":\"long press gesture cancelled at (" + x + "," + y + ")\"}";
+        } catch (Exception e) {
+            return "{\"error\":\"long press failed: " + escapeJson(e.getMessage()) + "\"}";
+        }
+    }
+
+    // Swipe from one point to another with a given duration
+    public String swipe(int x1, int y1, int x2, int y2, int durationMs) {
+        try {
+            if (durationMs < 50) durationMs = 300; // minimum reasonable swipe time
+
+            android.graphics.Path path = new android.graphics.Path();
+            path.moveTo(x1, y1);
+            path.lineTo(x2, y2);
+
+            android.accessibilityservice.GestureDescription.StrokeDescription stroke =
+                new android.accessibilityservice.GestureDescription.StrokeDescription(path, 0, durationMs);
+            android.accessibilityservice.GestureDescription.Builder builder =
+                new android.accessibilityservice.GestureDescription.Builder();
+            builder.addStroke(stroke);
+
+            final boolean[] completed = {false};
+            final java.util.concurrent.CountDownLatch latch = new java.util.concurrent.CountDownLatch(1);
+
+            dispatchGesture(builder.build(), new GestureResultCallback() {
+                @Override
+                public void onCompleted(android.accessibilityservice.GestureDescription gesture) {
+                    completed[0] = true;
+                    latch.countDown();
+                }
+                @Override
+                public void onCancelled(android.accessibilityservice.GestureDescription gesture) {
+                    latch.countDown();
+                }
+            }, new android.os.Handler(getMainLooper()));
+
+            latch.await(durationMs + 2000, java.util.concurrent.TimeUnit.MILLISECONDS);
+
+            if (completed[0]) {
+                return "{\"status\":\"swiped\",\"from\":{\"x\":" + x1 + ",\"y\":" + y1 + "},\"to\":{\"x\":" + x2 + ",\"y\":" + y2 + "},\"duration\":" + durationMs + "}";
+            }
+            return "{\"error\":\"swipe gesture cancelled\"}";
+        } catch (Exception e) {
+            return "{\"error\":\"swipe failed: " + escapeJson(e.getMessage()) + "\"}";
+        }
+    }
+
+    // Convenience: swipe up (scroll down) at center of screen
+    public String swipeUp() {
+        android.graphics.Point size = new android.graphics.Point();
+        android.os.Display display = getSystemService(android.content.Context.WINDOW_SERVICE) != null
+            ? ((android.view.WindowManager) getSystemService(android.content.Context.WINDOW_SERVICE)).getDefaultDisplay()
+            : null;
+        if (display != null) display.getSize(size);
+        int w = size.x > 0 ? size.x : 1080;
+        int h = size.y > 0 ? size.y : 1920;
+        return swipe(w / 2, h * 3 / 4, w / 2, h / 4, 400);
+    }
+
+    // Convenience: swipe down (scroll up) at center of screen
+    public String swipeDown() {
+        android.graphics.Point size = new android.graphics.Point();
+        android.os.Display display = getSystemService(android.content.Context.WINDOW_SERVICE) != null
+            ? ((android.view.WindowManager) getSystemService(android.content.Context.WINDOW_SERVICE)).getDefaultDisplay()
+            : null;
+        if (display != null) display.getSize(size);
+        int w = size.x > 0 ? size.x : 1080;
+        int h = size.y > 0 ? size.y : 1920;
+        return swipe(w / 2, h / 4, w / 2, h * 3 / 4, 400);
+    }
+
+    // Find the smallest (most specific) accessibility node at a screen point
+    public AccessibilityNodeInfo findNodeAtPoint(AccessibilityNodeInfo root, int x, int y) {
+        if (root == null) return null;
+        android.graphics.Rect bounds = new android.graphics.Rect();
+        root.getBoundsInScreen(bounds);
+        if (!bounds.contains(x, y)) return null;
+        for (int i = 0; i < root.getChildCount(); i++) {
+            AccessibilityNodeInfo child = root.getChild(i);
+            if (child != null) {
+                AccessibilityNodeInfo found = findNodeAtPoint(child, x, y);
+                if (found != null) return found;
+            }
+        }
+        return root;
+    }
+
+    // Click at a point, trying accessibility action first, then falling back to gesture
+    public String smartClick(int x, int y) {
+        try {
+            AccessibilityNodeInfo root = getRealAppRoot();
+            if (root != null) {
+                AccessibilityNodeInfo node = findNodeAtPoint(root, x, y);
+                if (node != null) {
+                    // Try accessibility click first
+                    AccessibilityNodeInfo target = node;
+                    if (!node.isClickable()) {
+                        AccessibilityNodeInfo clickable = findClickableParent(node);
+                        if (clickable != null) target = clickable;
+                    }
+                    if (target.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+                        return "{\"status\":\"clicked\",\"x\":" + x + ",\"y\":" + y + ",\"method\":\"accessibility\"}";
+                    }
+                }
+            }
+            // Fallback to gesture tap
+            return clickAtPoint(x, y);
+        } catch (Exception e) {
+            return "{\"error\":\"smart click failed: " + escapeJson(e.getMessage()) + "\"}";
+        }
+    }
+
+    // Long press at a point, trying accessibility action first, then falling back to gesture
+    public String smartLongPress(int x, int y) {
+        try {
+            AccessibilityNodeInfo root = getRealAppRoot();
+            if (root != null) {
+                AccessibilityNodeInfo node = findNodeAtPoint(root, x, y);
+                if (node != null) {
+                    AccessibilityNodeInfo target = node;
+                    if (!node.isClickable() && !node.isLongClickable()) {
+                        AccessibilityNodeInfo clickable = findClickableParent(node);
+                        if (clickable != null) target = clickable;
+                    }
+                    if (target.performAction(AccessibilityNodeInfo.ACTION_LONG_CLICK)) {
+                        return "{\"status\":\"long_pressed\",\"x\":" + x + ",\"y\":" + y + ",\"method\":\"accessibility\"}";
+                    }
+                }
+            }
+            return longPressAtPoint(x, y);
+        } catch (Exception e) {
+            return "{\"error\":\"smart long press failed: " + escapeJson(e.getMessage()) + "\"}";
+        }
+    }
+
+    // Get a quick list of all clickable/interactive elements with their bounds
+    public String getClickableElements() {
+        try {
+            AccessibilityNodeInfo root = getRealAppRoot();
+            if (root == null) {
+                return "{\"error\":\"No active window content available\"}";
+            }
+
+            StringBuilder sb = new StringBuilder();
+            sb.append("{\"app\":\"").append(escapeJson(currentAppLabel != null ? currentAppLabel : "")).append("\"");
+            sb.append(",\"elements\":[");
+
+            java.util.List<AccessibilityNodeInfo> visited = new ArrayList<>();
+            collectClickable(root, sb, visited, 0);
+
+            // Remove trailing comma if any
+            String json = sb.toString();
+            if (json.endsWith(",")) json = json.substring(0, json.length() - 1);
+            json += "]}";
+
+            return json;
+        } catch (Exception e) {
+            return "{\"error\":\"Failed to get clickable elements: " + escapeJson(e.getMessage()) + "\"}";
+        }
+    }
+
+    private void collectClickable(AccessibilityNodeInfo node, StringBuilder sb,
+                                   List<AccessibilityNodeInfo> visited, int depth) {
+        if (node == null || visited.contains(node)) return;
+        visited.add(node);
+
+        boolean isInteractive = node.isClickable() || node.isLongClickable() || node.isEditable();
+        boolean hasContent = false;
+        CharSequence text = node.getText();
+        CharSequence desc = node.getContentDescription();
+        String textStr = "";
+        String descStr = "";
+        if (text != null && text.length() > 0) {
+            textStr = text.toString().trim();
+            hasContent = true;
+        }
+        if (desc != null && desc.length() > 0) {
+            descStr = desc.toString().trim();
+            hasContent = true;
+        }
+
+        if (isInteractive && (hasContent || depth <= 3)) {
+            android.graphics.Rect bounds = new android.graphics.Rect();
+            node.getBoundsInScreen(bounds);
+
+            String role = inferRole(node);
+            String resId = node.getViewIdResourceName();
+
+            // Only include if has some content or is clickable
+            if (isClickable(node) || hasContent) {
+                if (sb.length() > sb.indexOf("[") + 1 && sb.charAt(sb.length() - 1) != '[') {
+                    // Check if we need a comma — we track with a simple flag
+                }
+                sb.append("{\"text\":\"").append(escapeJson(textStr)).append("\"");
+                if (!descStr.isEmpty()) sb.append(",\"desc\":\"").append(escapeJson(descStr)).append("\"");
+                if (!role.isEmpty()) sb.append(",\"role\":\"").append(escapeJson(role)).append("\"");
+                if (resId != null && !resId.isEmpty()) sb.append(",\"resId\":\"").append(escapeJson(resId)).append("\"");
+                sb.append(",\"clickable\":").append(node.isClickable());
+                sb.append(",\"longClickable\":").append(node.isLongClickable());
+                sb.append(",\"editable\":").append(node.isEditable());
+                sb.append(",\"bounds\":{\"x\":").append(bounds.left)
+                  .append(",\"y\":").append(bounds.top)
+                  .append(",\"w\":").append(bounds.width())
+                  .append(",\"h\":").append(bounds.height()).append("}");
+                // Add center point for easy tapping
+                sb.append(",\"center\":{\"x\":").append(bounds.left + bounds.width() / 2)
+                  .append(",\"y\":").append(bounds.top + bounds.height() / 2).append("}");
+                sb.append("},");
+            }
+        }
+
+        for (int i = 0; i < node.getChildCount(); i++) {
+            AccessibilityNodeInfo child = node.getChild(i);
+            if (child != null) {
+                collectClickable(child, sb, visited, depth + 1);
+            }
+        }
+    }
+
+    private boolean isClickable(AccessibilityNodeInfo node) {
+        return node.isClickable() || node.isLongClickable();
+    }
+
+    // Get screen size
+    public String getScreenSize() {
+        try {
+            android.view.WindowManager wm = (android.view.WindowManager) getSystemService(android.content.Context.WINDOW_SERVICE);
+            android.os.Display display = wm.getDefaultDisplay();
+            android.graphics.Point size = new android.graphics.Point();
+            display.getSize(size);
+            return "{\"width\":" + size.x + ",\"height\":" + size.y + "}";
+        } catch (Exception e) {
+            return "{\"width\":1080,\"height\":1920}";
+        }
     }
 }

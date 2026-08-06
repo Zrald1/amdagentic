@@ -1050,6 +1050,62 @@ public class FloatingRobotService extends Service implements SurfaceHolder.Callb
         return svc.replyToNotification(index, message);
     }
 
+    // ── Gesture-based UI automation bridge methods ──
+
+    public String clickAtPointJava(int x, int y) {
+        ArgosAccessibilityService svc = ArgosAccessibilityService.getInstance();
+        if (svc == null) return "{\"error\":\"Accessibility service not enabled.\"}";
+        return svc.clickAtPoint(x, y);
+    }
+
+    public String longPressAtPointJava(int x, int y) {
+        ArgosAccessibilityService svc = ArgosAccessibilityService.getInstance();
+        if (svc == null) return "{\"error\":\"Accessibility service not enabled.\"}";
+        return svc.longPressAtPoint(x, y);
+    }
+
+    public String swipeJava(int x1, int y1, int x2, int y2, int durationMs) {
+        ArgosAccessibilityService svc = ArgosAccessibilityService.getInstance();
+        if (svc == null) return "{\"error\":\"Accessibility service not enabled.\"}";
+        return svc.swipe(x1, y1, x2, y2, durationMs);
+    }
+
+    public String swipeUpJava() {
+        ArgosAccessibilityService svc = ArgosAccessibilityService.getInstance();
+        if (svc == null) return "{\"error\":\"Accessibility service not enabled.\"}";
+        return svc.swipeUp();
+    }
+
+    public String swipeDownJava() {
+        ArgosAccessibilityService svc = ArgosAccessibilityService.getInstance();
+        if (svc == null) return "{\"error\":\"Accessibility service not enabled.\"}";
+        return svc.swipeDown();
+    }
+
+    public String smartClickJava(int x, int y) {
+        ArgosAccessibilityService svc = ArgosAccessibilityService.getInstance();
+        if (svc == null) return "{\"error\":\"Accessibility service not enabled.\"}";
+        return svc.smartClick(x, y);
+    }
+
+    public String smartLongPressJava(int x, int y) {
+        ArgosAccessibilityService svc = ArgosAccessibilityService.getInstance();
+        if (svc == null) return "{\"error\":\"Accessibility service not enabled.\"}";
+        return svc.smartLongPress(x, y);
+    }
+
+    public String getClickableElementsJava() {
+        ArgosAccessibilityService svc = ArgosAccessibilityService.getInstance();
+        if (svc == null) return "{\"error\":\"Accessibility service not enabled.\"}";
+        return svc.getClickableElements();
+    }
+
+    public String getScreenSizeJava() {
+        ArgosAccessibilityService svc = ArgosAccessibilityService.getInstance();
+        if (svc == null) return "{\"error\":\"Accessibility service not enabled.\"}";
+        return svc.getScreenSize();
+    }
+
     // Called from C++ via JNI to perform HTTP POST (handles HTTPS automatically)
     public String httpPostJava(String url, String headers, String body, boolean stream) {
         try {

@@ -2,6 +2,7 @@
 #include "platform.h"
 #include "ui_inspector.h"
 #include <sstream>
+#include <vector>
 #include <fstream>
 #include <dirent.h>
 #include <sys/stat.h>
@@ -275,6 +276,91 @@ std::string dispatch_tool(const std::string& tool_name, const std::string& args)
         int idx = std::atoi(args.substr(0, pipe).c_str());
         std::string msg = args.substr(pipe + 1);
         return argos::replyToNotificationByIdx(idx, msg);
+    }
+
+    // ── Gesture-based UI automation tools ──
+
+    if (name == "ui_tap_at" || name == "ui_tap_point") {
+        // Args format: "x,y"
+        if (args.empty()) return "{\"error\":\"ui_tap_at needs: x,y\"}";
+        size_t comma = args.find(',');
+        if (comma == std::string::npos) return "{\"error\":\"ui_tap_at needs: x,y (comma separated)\"}";
+        int x = std::atoi(args.substr(0, comma).c_str());
+        int y = std::atoi(args.substr(comma + 1).c_str());
+        std::string result = argos::clickAtPoint(x, y);
+        std::this_thread::sleep_for(std::chrono::milliseconds(800));
+        return result;
+    }
+
+    if (name == "ui_longpress_at" || name == "ui_long_press_point") {
+        if (args.empty()) return "{\"error\":\"ui_longpress_at needs: x,y\"}";
+        size_t comma = args.find(',');
+        if (comma == std::string::npos) return "{\"error\":\"ui_longpress_at needs: x,y (comma separated)\"}";
+        int x = std::atoi(args.substr(0, comma).c_str());
+        int y = std::atoi(args.substr(comma + 1).c_str());
+        std::string result = argos::longPressAtPoint(x, y);
+        std::this_thread::sleep_for(std::chrono::milliseconds(800));
+        return result;
+    }
+
+    if (name == "ui_smart_click" || name == "ui_smart_tap") {
+        // Smart click: tries accessibility action first, falls back to gesture
+        if (args.empty()) return "{\"error\":\"ui_smart_click needs: x,y\"}";
+        size_t comma = args.find(',');
+        if (comma == std::string::npos) return "{\"error\":\"ui_smart_click needs: x,y (comma separated)\"}";
+        int x = std::atoi(args.substr(0, comma).c_str());
+        int y = std::atoi(args.substr(comma + 1).c_str());
+        std::string result = argos::smartClick(x, y);
+        std::this_thread::sleep_for(std::chrono::milliseconds(800));
+        return result;
+    }
+
+    if (name == "ui_smart_longpress") {
+        if (args.empty()) return "{\"error\":\"ui_smart_longpress needs: x,y\"}";
+        size_t comma = args.find(',');
+        if (comma == std::string::npos) return "{\"error\":\"ui_smart_longpress needs: x,y (comma separated)\"}";
+        int x = std::atoi(args.substr(0, comma).c_str());
+        int y = std::atoi(args.substr(comma + 1).c_str());
+        std::string result = argos::smartLongPress(x, y);
+        std::this_thread::sleep_for(std::chrono::milliseconds(800));
+        return result;
+    }
+
+    if (name == "ui_swipe" || name == "ui_gesture_swipe") {
+        // Args format: "x1,y1,x2,y2" or "x1,y1,x2,y2,duration"
+        if (args.empty()) return "{\"error\":\"ui_swipe needs: x1,y1,x2,y2[,duration]\"}";
+        std::vector<int> nums;
+        std::stringstream ss(args);
+        std::string token;
+        while (std::getline(ss, token, ',')) {
+            nums.push_back(std::atoi(token.c_str()));
+        }
+        if (nums.size() < 4) return "{\"error\":\"ui_swipe needs at least 4 values: x1,y1,x2,y2\"}";
+        int duration = nums.size() > 4 ? nums[4] : 300;
+        std::string result = argos::swipeGesture(nums[0], nums[1], nums[2], nums[3], duration);
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        return result;
+    }
+
+    if (name == "ui_swipe_up" || name == "swipe_up") {
+        std::string result = argos::swipeUp();
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        return result;
+    }
+
+    if (name == "ui_swipe_down" || name == "swipe_down") {
+        std::string result = argos::swipeDown();
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        return result;
+    }
+
+    if (name == "ui_elements" || name == "ui_clickable") {
+        // Quick list of all clickable/interactive elements with bounds and center points
+        return argos::getClickableElements();
+    }
+
+    if (name == "screen_size" || name == "ui_screen_size") {
+        return argos::getScreenSize();
     }
 
     return "{\"error\":\"Unknown tool: " + name + "\"}";

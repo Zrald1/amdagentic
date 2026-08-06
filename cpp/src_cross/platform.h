@@ -69,6 +69,35 @@ std::string getNotificationsList();
 // Reply to a notification by index
 std::string replyToNotificationByIdx(int index, const std::string& message);
 
+// ── Gesture-based UI automation (dispatchGesture) ──
+
+// Tap (click) at a screen coordinate
+std::string clickAtPoint(int x, int y);
+
+// Long press at a screen coordinate
+std::string longPressAtPoint(int x, int y);
+
+// Swipe from one point to another
+std::string swipeGesture(int x1, int y1, int x2, int y2, int durationMs);
+
+// Swipe up (scroll down content)
+std::string swipeUp();
+
+// Swipe down (scroll up content)
+std::string swipeDown();
+
+// Smart click at point — tries accessibility action first, falls back to gesture
+std::string smartClick(int x, int y);
+
+// Smart long press at point — tries accessibility action first, falls back to gesture
+std::string smartLongPress(int x, int y);
+
+// Get all clickable/interactive elements with their bounds and center points
+std::string getClickableElements();
+
+// Get screen size as JSON {"width":W,"height":H}
+std::string getScreenSize();
+
 // Get current time in milliseconds
 int64_t getTimeMs();
 

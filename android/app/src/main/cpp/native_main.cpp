@@ -194,6 +194,8 @@ Java_com_argos_companion_FloatingRobotService_nativeSendChat(JNIEnv* env, jobjec
 
     // Run chat in background thread
     std::thread([userMsg]() {
+        LOGI("Chat thread started for message: %s", userMsg.c_str());
+
         std::string accumulated;
         std::string response = g_agent.chatStreaming(userMsg,
             [&](const std::string& delta) -> bool {
@@ -202,11 +204,17 @@ Java_com_argos_companion_FloatingRobotService_nativeSendChat(JNIEnv* env, jobjec
                 return !g_agent.m_abort.load();
             });
 
+        LOGI("Chat response: %s (len=%zu)", response.c_str(), response.size());
+
         g_robot.setThinking(false);
         g_robot.setTalking(true);
 
         if (g_agent.m_abort.load()) {
             callJavaMethod("onChatError", "(Ljava/lang/String;)V", "Cancelled");
+        } else if (response.empty()) {
+            callJavaMethod("onChatError", "(Ljava/lang/String;)V", "No response from server. Check network connection.");
+        } else if (response.find("[Error:") != std::string::npos) {
+            callJavaMethod("onChatError", "(Ljava/lang/String;)V", response);
         } else {
             callJavaMethod("onChatResponse", "(Ljava/lang/String;)V", response);
         }

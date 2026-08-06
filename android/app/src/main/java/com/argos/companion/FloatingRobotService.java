@@ -38,6 +38,10 @@ public class FloatingRobotService extends Service implements SurfaceHolder.Callb
     private boolean bubbleVisible = false;
     private boolean chatInProgress = false;
 
+    private WindowManager.LayoutParams robotParams;
+    private WindowManager.LayoutParams bubbleParams;
+    private int layoutType;
+
     private static FloatingRobotService instance;
 
     @Override
@@ -59,28 +63,38 @@ public class FloatingRobotService extends Service implements SurfaceHolder.Callb
         int screenWidth = metrics.widthPixels;
         int screenHeight = metrics.heightPixels;
 
-        // SurfaceView for robot rendering — full screen, transparent
+        // Robot window size — just big enough for the robot, not full screen
+        // This allows touches to pass through to apps outside the robot area
+        float density = metrics.density;
+        int robotWindowWidth = (int) (250 * density);
+        int robotWindowHeight = (int) (320 * density);
+
+        // SurfaceView for robot rendering — small window, transparent
         surfaceView = new SurfaceView(this);
         surfaceView.setZOrderOnTop(true);
         surfaceView.getHolder().setFormat(PixelFormat.TRANSLUCENT);
         surfaceView.getHolder().addCallback(this);
 
-        int layoutType = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O ?
+        layoutType = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O ?
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY :
             WindowManager.LayoutParams.TYPE_PHONE;
 
-        // Full-screen transparent overlay for the robot
-        WindowManager.LayoutParams robotParams = new WindowManager.LayoutParams(
-            WindowManager.LayoutParams.MATCH_PARENT,
-            WindowManager.LayoutParams.MATCH_PARENT,
+        // Small overlay window — only covers robot area, touches outside pass through
+        robotParams = new WindowManager.LayoutParams(
+            robotWindowWidth,
+            robotWindowHeight,
             layoutType,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
             PixelFormat.TRANSLUCENT
         );
+        robotParams.gravity = Gravity.TOP | Gravity.START;
+        // Center initially
+        robotParams.x = (screenWidth - robotWindowWidth) / 2;
+        robotParams.y = (screenHeight - robotWindowHeight) / 2;
 
         windowManager.addView(surfaceView, robotParams);
 
-        // Touch listener on the surface — forward to native, but let touches pass through
+        // Touch listener on the surface — forward to native in window-local coords
         surfaceView.setOnTouchListener((v, event) -> {
             float x = event.getX();
             float y = event.getY();
@@ -92,13 +106,13 @@ public class FloatingRobotService extends Service implements SurfaceHolder.Callb
             } else if (action == MotionEvent.ACTION_MOVE) {
                 nativeOnTouch(x, y, 2);
             }
-            return false; // Let touch pass through to apps below
+            return true;
         });
 
         // Speech bubble overlay — hidden by default
         bubbleOverlay = createSpeechBubble();
 
-        WindowManager.LayoutParams bubbleParams = new WindowManager.LayoutParams(
+        bubbleParams = new WindowManager.LayoutParams(
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
             layoutType,
@@ -111,6 +125,12 @@ public class FloatingRobotService extends Service implements SurfaceHolder.Callb
 
         bubbleOverlay.setVisibility(View.GONE);
         windowManager.addView(bubbleOverlay, bubbleParams);
+    }
+
+    // Called from C++ via JNI with robot position "x,y,size"
+    // Robot walks within the fixed window — no window movement needed
+    public void onRobotPosition(String posStr) {
+        // No-op: robot renders within the small fixed window
     }
 
     private LinearLayout createSpeechBubble() {
@@ -198,11 +218,9 @@ public class FloatingRobotService extends Service implements SurfaceHolder.Callb
         android.os.Handler handler = new android.os.Handler(getMainLooper());
         handler.post(() -> {
             if (bubbleVisible) {
-                bubbleOverlay.setVisibility(View.GONE);
-                bubbleVisible = false;
+                hideBubble();
             } else {
-                bubbleOverlay.setVisibility(View.VISIBLE);
-                bubbleVisible = true;
+                showBubble();
             }
         });
     }
@@ -212,10 +230,45 @@ public class FloatingRobotService extends Service implements SurfaceHolder.Callb
         android.os.Handler handler = new android.os.Handler(getMainLooper());
         handler.post(() -> {
             if (bubbleVisible) {
-                bubbleOverlay.setVisibility(View.GONE);
-                bubbleVisible = false;
+                hideBubble();
             }
         });
+    }
+
+    private void showBubble() {
+        bubbleOverlay.setVisibility(View.VISIBLE);
+        bubbleVisible = true;
+        // Remove FLAG_NOT_FOCUSABLE so EditText can receive focus and keyboard
+        bubbleParams.flags &= ~WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE;
+        try {
+            windowManager.updateViewLayout(bubbleOverlay, bubbleParams);
+        } catch (Exception e) {}
+        // Focus the input field to bring up keyboard
+        inputEdit.requestFocus();
+        android.os.Handler h = new android.os.Handler(getMainLooper());
+        h.postDelayed(() -> {
+            android.view.inputmethod.InputMethodManager imm =
+                (android.view.inputmethod.InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+            if (imm != null) {
+                imm.showSoftInput(inputEdit, android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT);
+            }
+        }, 100);
+    }
+
+    private void hideBubble() {
+        // Hide keyboard first
+        android.view.inputmethod.InputMethodManager imm =
+            (android.view.inputmethod.InputMethodManager) getSystemService(INPUT_METHOD_SERVICE);
+        if (imm != null && inputEdit != null) {
+            imm.hideSoftInputFromWindow(inputEdit.getWindowToken(), 0);
+        }
+        bubbleOverlay.setVisibility(View.GONE);
+        bubbleVisible = false;
+        // Add FLAG_NOT_FOCUSABLE back so touches pass through
+        bubbleParams.flags |= WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE;
+        try {
+            windowManager.updateViewLayout(bubbleOverlay, bubbleParams);
+        } catch (Exception e) {}
     }
 
     private void sendMessage() {

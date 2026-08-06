@@ -134,26 +134,101 @@ static std::string httpRequest(const std::string& url, const std::string& header
 
     // Read response
     std::string fullResponse;
+    std::string accumulated;
+    bool headersStripped = false;
+    bool isChunked = false;
     char buf[8192];
     ssize_t n;
     while ((n = recv(sock, buf, sizeof(buf), 0)) > 0) {
-        fullResponse.append(buf, n);
-        if (stream && callback) {
-            if (!callback(std::string(buf, n))) break;
+        accumulated.append(buf, n);
+
+        if (!headersStripped) {
+            // Find end of HTTP headers
+            size_t headerEnd = accumulated.find("\r\n\r\n");
+            if (headerEnd != std::string::npos) {
+                std::string headers = accumulated.substr(0, headerEnd);
+                LOGI("HTTP response headers: %s", headers.c_str());
+
+                // Check for error status
+                if (headers.find("200") == std::string::npos &&
+                    headers.find("OK") == std::string::npos) {
+                    LOGE("HTTP error: %s", headers.substr(0, 64).c_str());
+                }
+
+                isChunked = headers.find("chunked") != std::string::npos;
+
+                std::string body = accumulated.substr(headerEnd + 4);
+                accumulated = body;
+                headersStripped = true;
+
+                if (!isChunked && stream && callback && !body.empty()) {
+                    if (!callback(body)) {
+                        close(sock);
+                        return body;
+                    }
+                }
+                if (!stream) {
+                    fullResponse = body;
+                }
+            }
+        } else {
+            // Headers already stripped
+            if (!isChunked) {
+                std::string chunk(buf, n);
+                if (stream && callback) {
+                    if (!callback(chunk)) break;
+                }
+                if (!stream) {
+                    fullResponse += chunk;
+                }
+            } else {
+                // For chunked: just accumulate, decode at end
+                // (subsequent recv data is already in accumulated)
+            }
         }
     }
     close(sock);
 
+    if (isChunked) {
+        // Decode chunked body from accumulated
+        std::string decoded;
+        size_t pos = 0;
+        while (pos < accumulated.size()) {
+            size_t lineEnd = accumulated.find("\r\n", pos);
+            if (lineEnd == std::string::npos) break;
+            std::string sizeStr = accumulated.substr(pos, lineEnd - pos);
+            size_t semi = sizeStr.find(';');
+            if (semi != std::string::npos) sizeStr = sizeStr.substr(0, semi);
+            unsigned long chunkSize = strtoul(sizeStr.c_str(), nullptr, 16);
+            if (chunkSize == 0) break;
+            size_t dataStart = lineEnd + 2;
+            if (dataStart + chunkSize > accumulated.size()) break;
+            std::string chunkData = accumulated.substr(dataStart, chunkSize);
+            decoded += chunkData;
+            pos = dataStart + chunkSize + 2;
+
+            // For streaming, send each decoded chunk to callback
+            if (stream && callback && !chunkData.empty()) {
+                if (!callback(chunkData)) break;
+            }
+        }
+        if (!stream) {
+            return decoded;
+        }
+        return decoded;
+    }
+
     if (!stream) {
-        // Extract body from HTTP response
-        size_t bodyStart = fullResponse.find("\r\n\r\n");
-        if (bodyStart != std::string::npos) {
-            return fullResponse.substr(bodyStart + 4);
+        if (!headersStripped) {
+            size_t bodyStart = fullResponse.find("\r\n\r\n");
+            if (bodyStart != std::string::npos) {
+                return fullResponse.substr(bodyStart + 4);
+            }
         }
         return fullResponse;
     }
 
-    return fullResponse;
+    return accumulated;
 }
 
 std::string httpPost(const std::string& url, const std::string& headers, const std::string& body) {

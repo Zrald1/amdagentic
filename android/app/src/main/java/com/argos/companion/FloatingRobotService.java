@@ -66,6 +66,16 @@ public class FloatingRobotService extends Service implements SurfaceHolder.Callb
     private WindowManager.LayoutParams awarenessParams;
     private android.os.Handler awarenessHandler = new android.os.Handler();
 
+    // Thought bubble — periodic AI-generated comment near robot
+    private TextView thoughtBubble;
+    private WindowManager.LayoutParams thoughtParams;
+    private android.os.Handler thoughtHandler = new android.os.Handler();
+    private Runnable thoughtRunnable;
+    private static final int THOUGHT_INTERVAL_MS = 10000; // 10 seconds
+    private static final int THOUGHT_DISPLAY_MS = 6000;   // show for 6 seconds
+    private String lastThoughtApp = "";
+    private int thoughtCount = 0;
+
     private static FloatingRobotService instance;
 
     @Override
@@ -80,6 +90,7 @@ public class FloatingRobotService extends Service implements SurfaceHolder.Callb
         windowManager = (WindowManager) getSystemService(WINDOW_SERVICE);
 
         createFloatingWindow();
+        startThoughtTimer();
     }
 
     private void createFloatingWindow() {
@@ -663,7 +674,12 @@ public class FloatingRobotService extends Service implements SurfaceHolder.Callb
     @Override
     public void onDestroy() {
         super.onDestroy();
+        stopThoughtTimer();
         nativeDestroy();
+        if (thoughtBubble != null) {
+            try { windowManager.removeView(thoughtBubble); } catch (Exception e) {}
+            thoughtBubble = null;
+        }
         if (awarenessLabel != null) {
             try { windowManager.removeView(awarenessLabel); } catch (Exception e) {}
             awarenessLabel = null;
@@ -734,6 +750,179 @@ public class FloatingRobotService extends Service implements SurfaceHolder.Callb
             }, 3000);
         });
     }
+
+    // ── Periodic Thought Bubble ──
+    // Every 10 seconds, Argos generates a short comment about what the user is doing
+
+    private void startThoughtTimer() {
+        thoughtRunnable = new Runnable() {
+            @Override
+            public void run() {
+                generateThought();
+                thoughtHandler.postDelayed(this, THOUGHT_INTERVAL_MS);
+            }
+        };
+        // First thought after 5 seconds, then every 10 seconds
+        thoughtHandler.postDelayed(thoughtRunnable, 5000);
+    }
+
+    private void stopThoughtTimer() {
+        if (thoughtRunnable != null) {
+            thoughtHandler.removeCallbacks(thoughtRunnable);
+            thoughtRunnable = null;
+        }
+    }
+
+    private void generateThought() {
+        // Don't show thought if chat bubble is open or chat in progress
+        if (bubbleVisible || chatInProgress) return;
+
+        String currentApp = ArgosAccessibilityService.getCurrentAppLabel();
+        if (currentApp == null || currentApp.isEmpty()) currentApp = "the home screen";
+
+        // If same app as last thought, vary the prompt
+        String prompt;
+        thoughtCount++;
+        if (currentApp.equals(lastThoughtApp) && thoughtCount % 3 != 0) {
+            // Same app — generate a different kind of comment
+            prompt = "You are Argos, a cute robot companion floating on the user's screen. " +
+                    "The user has been using " + currentApp + " for a while. " +
+                    "Say something brief, funny, or helpful about it (max 15 words, 1 sentence). " +
+                    "Be casual and friendly. Don't use emojis. Vary your style.";
+        } else {
+            lastThoughtApp = currentApp;
+            prompt = "You are Argos, a cute robot companion floating on the user's screen. " +
+                    "The user just opened " + currentApp + ". " +
+                    "Say something brief, funny, or helpful about it (max 15 words, 1 sentence). " +
+                    "Be casual and friendly. Don't use emojis.";
+        }
+
+        // Call API in background thread
+        new Thread(() -> {
+            try {
+                String thought = callDeepSeekForThought(prompt);
+                if (thought != null && !thought.isEmpty()) {
+                    showThoughtBubble(thought);
+                }
+            } catch (Exception e) {
+                // Silent fail — don't disrupt user
+            }
+        }).start();
+    }
+
+    private String callDeepSeekForThought(String prompt) {
+        try {
+            java.net.URL url = new java.net.URL("https://developer.amd.com.cn/radeon/api/v1/chat/completions");
+            javax.net.ssl.HttpsURLConnection conn = (javax.net.ssl.HttpsURLConnection) url.openConnection();
+            conn.setRequestMethod("POST");
+            conn.setRequestProperty("Content-Type", "application/json");
+            conn.setRequestProperty("Authorization", "Bearer rc-c042ad0acc56669f7b46e70f924189b5ac51664ce329f5b2");
+            conn.setConnectTimeout(8000);
+            conn.setReadTimeout(8000);
+
+            // Build JSON body manually
+            String escapedPrompt = prompt.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n");
+            String body = "{\"model\":\"DeepSeek-V4-Flash\",\"stream\":false,\"messages\":[{\"role\":\"user\",\"content\":\"" + escapedPrompt + "\"}]}";
+
+            conn.setDoOutput(true);
+            java.io.OutputStream os = conn.getOutputStream();
+            os.write(body.getBytes("UTF-8"));
+            os.close();
+
+            int responseCode = conn.getResponseCode();
+            if (responseCode != 200) return null;
+
+            java.io.BufferedReader reader = new java.io.BufferedReader(
+                new java.io.InputStreamReader(conn.getInputStream(), "UTF-8"));
+            StringBuilder sb = new StringBuilder();
+            String line;
+            while ((line = reader.readLine()) != null) sb.append(line);
+            reader.close();
+
+            // Parse JSON response — extract choices[0].message.content
+            String response = sb.toString();
+            // Simple JSON extraction
+            int choicesIdx = response.indexOf("\"choices\"");
+            if (choicesIdx < 0) return null;
+            int contentIdx = response.indexOf("\"content\"", choicesIdx);
+            if (contentIdx < 0) return null;
+            int start = response.indexOf("\"", contentIdx + 9) + 1;
+            int end = start;
+            while (end < response.length()) {
+                if (response.charAt(end) == '\\') { end += 2; continue; }
+                if (response.charAt(end) == '"') break;
+                end++;
+            }
+            String content = response.substring(start, end)
+                .replace("\\n", " ")
+                .replace("\\\"", "\"")
+                .replace("\\'", "'")
+                .trim();
+            return content;
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    private void showThoughtBubble(final String text) {
+        thoughtHandler.post(() -> {
+            // Don't show if chat bubble is open
+            if (bubbleVisible || chatInProgress) return;
+
+            if (thoughtBubble == null) {
+                thoughtBubble = new TextView(this);
+                thoughtBubble.setTextColor(Color.rgb(255, 255, 255));
+                thoughtBubble.setTextSize(14f);
+                thoughtBubble.setPadding(24, 16, 24, 16);
+                thoughtBubble.setMaxWidth((int) (screenWidth * 0.7f));
+                thoughtBubble.setBackgroundColor(Color.argb(220, 25, 25, 35));
+                // Rounded background
+                android.graphics.drawable.GradientDrawable bg = new android.graphics.drawable.GradientDrawable();
+                bg.setColor(Color.argb(220, 25, 25, 35));
+                bg.setCornerRadius(20f);
+                bg.setStroke(2, Color.rgb(0, 180, 255));
+                thoughtBubble.setBackground(bg);
+
+                thoughtParams = new WindowManager.LayoutParams(
+                    WindowManager.LayoutParams.WRAP_CONTENT,
+                    WindowManager.LayoutParams.WRAP_CONTENT,
+                    layoutType,
+                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+                    PixelFormat.TRANSLUCENT
+                );
+                thoughtParams.gravity = Gravity.TOP | Gravity.START;
+            }
+
+            thoughtBubble.setText("💬 " + text);
+
+            // Position above the robot
+            thoughtParams.x = (int) Math.max(10, robotScreenX - screenWidth * 0.2f);
+            thoughtParams.y = (int) Math.max(10, robotScreenY - robotSize * 2.8f);
+            // If too close to top, show below robot
+            if (thoughtParams.y < 50) {
+                thoughtParams.y = (int) (robotScreenY + robotSize + 20);
+            }
+
+            try {
+                if (thoughtBubble.getWindowToken() == null) {
+                    windowManager.addView(thoughtBubble, thoughtParams);
+                } else {
+                    windowManager.updateViewLayout(thoughtBubble, thoughtParams);
+                }
+                thoughtBubble.setVisibility(View.VISIBLE);
+            } catch (Exception e) {}
+
+            // Auto-hide after THOUGHT_DISPLAY_MS
+            thoughtHandler.removeCallbacks(thoughtHideRunnable);
+            thoughtHandler.postDelayed(thoughtHideRunnable, THOUGHT_DISPLAY_MS);
+        });
+    }
+
+    private Runnable thoughtHideRunnable = () -> {
+        if (thoughtBubble != null) {
+            thoughtBubble.setVisibility(View.GONE);
+        }
+    };
 
     // ── Browser / Screen interaction via Accessibility Service ──
     // Called from C++ via JNI to interact with the user's browser and screen

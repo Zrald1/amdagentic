@@ -311,7 +311,7 @@ std::string executeActionSequence(const std::vector<ActionStep>& steps) {
         } else if (step.action == "scroll") {
             argos::scrollScreen(step.scrollDir);
             std::this_thread::sleep_for(std::chrono::milliseconds(500));
-            stepResult = "{\"status\":\"scrolled " + (step.scrollDir == 0 ? "up" : "down") + "\"}";
+            stepResult = std::string("{\"status\":\"scrolled ") + (step.scrollDir == 0 ? "up" : "down") + "\"}";
         } else if (step.action == "inspect") {
             InspectionSession session = inspectUI(20);
             stepResult = session.toJson(true);

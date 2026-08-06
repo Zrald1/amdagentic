@@ -36,9 +36,9 @@ void log(const char* message) {
 static JavaVM* s_jvm = nullptr;
 static jobject s_service = nullptr;
 
-void setJniForHttp(JavaVM* jvm, jobject service) {
-    s_jvm = jvm;
-    s_service = service;
+void setJniForHttp(void* jvm, void* service) {
+    s_jvm = (JavaVM*)jvm;
+    s_service = (jobject)service;
 }
 
 // Call Java's httpPostJava method via JNI
@@ -111,6 +111,25 @@ int64_t getTimeMs() {
     struct timeval tv;
     gettimeofday(&tv, nullptr);
     return (int64_t)tv.tv_sec * 1000 + tv.tv_usec / 1000;
+}
+
+std::string httpPost(const std::string& url, const std::string& headers, const std::string& body) {
+    LOGI("httpPost via Java: %s", url.c_str());
+    std::string result = callJavaHttpPost(url, headers, body, false);
+    LOGI("httpPost result len=%zu", result.size());
+    return result;
+}
+
+std::string httpPostStream(const std::string& url, const std::string& headers,
+                           const std::string& body,
+                           std::function<bool(const std::string&)> callback) {
+    LOGI("httpPostStream via Java: %s", url.c_str());
+    std::string result = callJavaHttpPost(url, headers, body, true);
+    LOGI("httpPostStream result len=%zu", result.size());
+    if (callback && !result.empty() && result[0] != '[') {
+        callback(result);
+    }
+    return result;
 }
 
 } // namespace argos

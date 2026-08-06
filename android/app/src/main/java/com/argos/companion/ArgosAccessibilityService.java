@@ -1080,7 +1080,7 @@ public class ArgosAccessibilityService extends AccessibilityService {
     // Convenience: swipe up (scroll down) at center of screen
     public String swipeUp() {
         android.graphics.Point size = new android.graphics.Point();
-        android.os.Display display = getSystemService(android.content.Context.WINDOW_SERVICE) != null
+        android.view.Display display = getSystemService(android.content.Context.WINDOW_SERVICE) != null
             ? ((android.view.WindowManager) getSystemService(android.content.Context.WINDOW_SERVICE)).getDefaultDisplay()
             : null;
         if (display != null) display.getSize(size);
@@ -1092,7 +1092,7 @@ public class ArgosAccessibilityService extends AccessibilityService {
     // Convenience: swipe down (scroll up) at center of screen
     public String swipeDown() {
         android.graphics.Point size = new android.graphics.Point();
-        android.os.Display display = getSystemService(android.content.Context.WINDOW_SERVICE) != null
+        android.view.Display display = getSystemService(android.content.Context.WINDOW_SERVICE) != null
             ? ((android.view.WindowManager) getSystemService(android.content.Context.WINDOW_SERVICE)).getDefaultDisplay()
             : null;
         if (display != null) display.getSize(size);
@@ -1257,7 +1257,7 @@ public class ArgosAccessibilityService extends AccessibilityService {
     public String getScreenSize() {
         try {
             android.view.WindowManager wm = (android.view.WindowManager) getSystemService(android.content.Context.WINDOW_SERVICE);
-            android.os.Display display = wm.getDefaultDisplay();
+            android.view.Display display = wm.getDefaultDisplay();
             android.graphics.Point size = new android.graphics.Point();
             display.getSize(size);
             return "{\"width\":" + size.x + ",\"height\":" + size.y + "}";

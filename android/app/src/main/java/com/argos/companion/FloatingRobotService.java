@@ -582,9 +582,50 @@ public class FloatingRobotService extends Service implements SurfaceHolder.Callb
                 }
             }
             if (clean.isEmpty()) {
-                addMessage("Argos: (tool executed, see results above)", Color.rgb(100, 200, 255));
+                // Update existing Argos message or add new one
+                boolean updated = false;
+                count = convoLayout.getChildCount();
+                for (int i = count - 1; i >= 0; i--) {
+                    View v = convoLayout.getChildAt(i);
+                    if (v instanceof TextView) {
+                        TextView tv = (TextView) v;
+                        if (tv.getTag() != null && tv.getTag().equals("thoughts")) {
+                            continue;
+                        }
+                        String current = tv.getText().toString();
+                        if (current.startsWith("Argos: ")) {
+                            tv.setText("Argos: (tool executed, see results above)");
+                            updated = true;
+                            break;
+                        }
+                    }
+                }
+                if (!updated) {
+                    addMessage("Argos: (tool executed, see results above)", Color.rgb(100, 200, 255));
+                }
             } else {
-                addMessage("Argos: " + clean, Color.rgb(100, 200, 255));
+                // Update existing Argos message with final clean response
+                boolean updated = false;
+                count = convoLayout.getChildCount();
+                for (int i = count - 1; i >= 0; i--) {
+                    View v = convoLayout.getChildAt(i);
+                    if (v instanceof TextView) {
+                        TextView tv = (TextView) v;
+                        if (tv.getTag() != null && tv.getTag().equals("thoughts")) {
+                            continue;
+                        }
+                        String current = tv.getText().toString();
+                        if (current.startsWith("Argos: ")) {
+                            tv.setText("Argos: " + clean);
+                            convoScroll.post(() -> convoScroll.fullScroll(ScrollView.FOCUS_DOWN));
+                            updated = true;
+                            break;
+                        }
+                    }
+                }
+                if (!updated) {
+                    addMessage("Argos: " + clean, Color.rgb(100, 200, 255));
+                }
             }
         });
     }

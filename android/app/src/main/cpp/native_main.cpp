@@ -244,8 +244,27 @@ Java_com_argos_companion_FloatingRobotService_nativeSendChat(JNIEnv* env, jobjec
         std::string accumulated;
         std::string response = g_agent.chatStreaming(userMsg,
             [&](const std::string& delta) -> bool {
+                // Check for reset signal (sent before follow-up iterations)
+                if (delta == "\x01RESET\x01") {
+                    accumulated.clear();
+                    return !g_agent.m_abort.load();
+                }
                 accumulated += delta;
-                callJavaMethod("onChatStream", "(Ljava/lang/String;)V", accumulated);
+                // Strip [TOOL:...] tags from displayed text
+                std::string display = accumulated;
+                size_t pos = 0;
+                while ((pos = display.find("[TOOL:", pos)) != std::string::npos) {
+                    size_t end = display.find(']', pos);
+                    if (end == std::string::npos) break;
+                    display.erase(pos, end - pos + 1);
+                }
+                // Clean up whitespace
+                auto cleanStart = display.find_first_not_of(" \t\n\r");
+                if (cleanStart == std::string::npos) display = "";
+                else if (cleanStart > 0) display = display.substr(cleanStart);
+                if (!display.empty()) {
+                    callJavaMethod("onChatStream", "(Ljava/lang/String;)V", display);
+                }
                 return !g_agent.m_abort.load();
             },
             [&](const std::string& thoughts) {

@@ -261,6 +261,8 @@ void AgentClientCore::initSystemPrompt() {
         "Do NOT auto-trigger tools on simple messages. Only use tools when needed.\n"
         "User messages may include [Context: User is currently using <app>] — use this to give relevant answers.\n"
         "When the user asks 'what am I doing' or 'what app am I using', use [TOOL:screen_active] to get accurate info.\n"
+        "When the user asks 'what do you see', 'what's on my screen', 'what's happening', 'read the screen', or similar — ALWAYS use [TOOL:screen_text] to read the screen, then summarize what you see.\n"
+        "When the user asks 'who texted me' or 'check my messages' — use [TOOL:notifications] to read notifications.\n"
         "The screen_active tool returns 'name' (friendly app name), 'package', and 'recent_apps' (comma-separated app history).\n"
         "If primary model is unavailable, fallback model is used automatically.";
 }
@@ -518,11 +520,12 @@ std::string AgentClientCore::chatStreaming(const std::string& userMessage, Strea
             messages.push_back(msg);
         }
 
-        if (iteration == 0) {
-            finalResponse = chatWithMessagesStreaming(messages, callback, thoughtsCallback);
-        } else {
-            finalResponse = chatWithMessages(messages);
+        // Always use streaming so the user sees follow-up responses after tool execution
+        if (iteration > 0 && callback) {
+            // Signal reset so accumulated text is cleared for the follow-up response
+            callback("\x01RESET\x01");
         }
+        finalResponse = chatWithMessagesStreaming(messages, callback, thoughtsCallback);
 
         if (!hasToolTags(finalResponse)) break;
 

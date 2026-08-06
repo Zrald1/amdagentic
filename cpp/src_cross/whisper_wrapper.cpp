@@ -241,12 +241,19 @@ std::vector<float> recordAudio(int durationSeconds) {
     }
 
     waveInStop(hWaveIn);
+    // Get actual number of bytes recorded (may be less if stopRecording() was called)
+    int recordedBytes = whdr.dwBytesRecorded;
+    if (recordedBytes == 0) recordedBytes = bufferSize;
     waveInUnprepareHeader(hWaveIn, &whdr, sizeof(WAVEHDR));
     waveInClose(hWaveIn);
 
     s_recording.store(false);
 
-    return pcm16ToFloat(pcm16);
+    // Only convert the actually recorded samples
+    int recordedSamples = recordedBytes / (bitsPerSample / 8) / channels;
+    std::vector<int16_t> actualPcm(recordedSamples, 0);
+    memcpy(actualPcm.data(), pcm16.data(), recordedSamples * 2);
+    return pcm16ToFloat(actualPcm);
     #else
     // Other platforms: not supported
     s_recording.store(false);

@@ -6,6 +6,7 @@
 #include "robot_renderer.h"
 #include "agent_client.h"
 #include "argos_tools.h"
+#include "../src_cross/whisper_wrapper.h"
 #include "resource.h"
 
 #include <windows.h>
@@ -26,15 +27,159 @@
 
 static HMODULE g_richEditDll = nullptr;
 
-// Custom message for async chat response
+// Control IDs (needed early by voice functions)
+#define IDC_BUBBLE_EDIT   3001
+#define IDC_BUBBLE_SEND   3002
+#define IDC_BUBBLE_VOICE  3003
+
+// Custom messages (needed early by voice functions)
 #define WM_CHAT_RESPONSE (WM_USER + 100)
 #define WM_CHAT_ERROR    (WM_USER + 101)
 #define WM_PROACTIVE_RESPONSE (WM_USER + 102)
-#define WM_CHAT_STREAM   (WM_USER + 103)  // Streaming partial response
+#define WM_CHAT_STREAM   (WM_USER + 103)
+#define WM_VOICE_RESULT  (WM_USER + 105)
+#define WM_VOICE_ERROR   (WM_USER + 106)
+#define WM_CAPSLOCK_PUSHTOTALK (WM_USER + 107)
+
+// Forward declarations (globals defined later)
+static WindowManager* g_windowMgr = nullptr;
+static HWND g_bubbleHwnd = nullptr;
+static void ShowMangaBubble(HINSTANCE hInstance, HWND parent);
+
+// ── Voice / Whisper state ──
+static bool g_whisperAutoInitTried = false;
+static bool g_voiceRecording = false;
+static std::vector<float> g_voiceSamples;
+static std::mutex g_voiceMutex;
+static std::wstring g_voiceTranscribedText;
+static std::wstring g_voiceErrorMsg;
+static HWND g_voiceBubbleHwnd = nullptr;  // bubble hwnd to send result to
+
+// ── Caps Lock push-to-talk ──
+static HHOOK g_kbHook = nullptr;
+static bool g_capsLockPressed = false;
+static std::chrono::steady_clock::time_point g_capsLockPressTime;
+static std::atomic<bool> g_capsLockRecording(false);
+
+// Try to auto-init whisper from common model paths
+static bool TryAutoInitWhisper() {
+    if (argos::whisperIsReady()) return true;
+    if (g_whisperAutoInitTried) return false;
+    g_whisperAutoInitTried = true;
+
+    // Common locations to look for the model
+    const char* paths[] = {
+        "ggml-tiny.en.bin",
+        "models/ggml-tiny.en.bin",
+        "../ggml-tiny.en.bin",
+        "build/ggml-tiny.en.bin",
+        "build/Release/ggml-tiny.en.bin",
+        "build/Debug/ggml-tiny.en.bin",
+    };
+    for (const char* p : paths) {
+        FILE* f = nullptr;
+        if (fopen_s(&f, p, "rb") == 0 && f) {
+            fclose(f);
+            if (argos::whisperInit(p)) return true;
+        }
+    }
+    return false;
+}
+
+// Start voice recording + transcription in background, then send to AI
+// maxDuration: max recording time (for push-to-talk, stopRecording() stops early)
+static void StartVoiceRecording(HWND bubbleHwnd, int maxDuration = 5) {
+    if (g_voiceRecording) return;
+
+    // Try auto-init whisper
+    if (!TryAutoInitWhisper()) {
+        MessageBoxW(bubbleHwnd,
+            L"Whisper model not found.\n\n"
+            L"Download ggml-tiny.en.bin (~75MB) from:\n"
+            L"https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin\n\n"
+            L"Place it in the same folder as argos.exe or use:\n"
+            L"[TOOL:whisper_init <path_to_model>]",
+            L"Argos — Voice Setup Needed", MB_OK | MB_ICONINFORMATION);
+        return;
+    }
+
+    g_voiceBubbleHwnd = bubbleHwnd;
+    g_voiceRecording = true;
+
+    // Show recording indicator in the bubble
+    if (bubbleHwnd) {
+        HWND hEdit = GetDlgItem(bubbleHwnd, IDC_BUBBLE_EDIT);
+        if (hEdit) SetWindowTextW(hEdit, L"\U0001F3A4 Listening... (release to send)");
+    }
+
+    // Record + transcribe in background thread
+    std::thread([bubbleHwnd, maxDuration]() {
+        // Record audio (stopRecording() can break the loop early)
+        std::vector<float> samples = argos::recordAudio(maxDuration);
+
+        std::string text = argos::whisperTranscribe(samples);
+
+        {
+            std::lock_guard<std::mutex> lk(g_voiceMutex);
+            // Convert UTF-8 to wide
+            if (!text.empty()) {
+                int wlen = MultiByteToWideChar(CP_UTF8, 0, text.c_str(), (int)text.size(), nullptr, 0);
+                g_voiceTranscribedText.resize(wlen);
+                MultiByteToWideChar(CP_UTF8, 0, text.c_str(), (int)text.size(), &g_voiceTranscribedText[0], wlen);
+            } else {
+                g_voiceTranscribedText = L"";
+            }
+        }
+
+        g_voiceRecording = false;
+        PostMessageW(bubbleHwnd, WM_VOICE_RESULT, 0, 0);
+    }).detach();
+}
+
+// Low-level keyboard hook for Caps Lock push-to-talk
+static LRESULT CALLBACK LowLevelKbProc(int nCode, WPARAM wParam, LPARAM lParam) {
+    if (nCode == HC_ACTION) {
+        KBDLLHOOKSTRUCT* kb = (KBDLLHOOKSTRUCT*)lParam;
+        if (kb->vkCode == VK_CAPITAL) {
+            if (wParam == WM_KEYDOWN || wParam == WM_SYSKEYDOWN) {
+                if (!g_capsLockPressed) {
+                    g_capsLockPressed = true;
+                    g_capsLockPressTime = std::chrono::steady_clock::now();
+                    // Start push-to-talk recording immediately
+                    g_capsLockRecording.store(true);
+                    if (g_windowMgr && g_windowMgr->GetHwnd()) {
+                        PostMessageW(g_windowMgr->GetHwnd(), WM_CAPSLOCK_PUSHTOTALK, 0, 0);
+                    }
+                }
+                // Swallow Caps Lock to prevent toggling
+                return 1;
+            } else if (wParam == WM_KEYUP || wParam == WM_SYSKEYUP) {
+                if (g_capsLockPressed) {
+                    g_capsLockPressed = false;
+                    auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        std::chrono::steady_clock::now() - g_capsLockPressTime).count();
+
+                    if (elapsed > 200) {
+                        // Long press = push-to-talk: stop recording, transcribe+send
+                        g_capsLockRecording.store(false);
+                        argos::stopRecording();
+                    } else {
+                        // Short press (<200ms) = cancel recording (too brief)
+                        g_capsLockRecording.store(false);
+                        argos::stopRecording();
+                    }
+                }
+                return 1;
+            }
+        }
+    }
+    return CallNextHookEx(g_kbHook, nCode, wParam, lParam);
+}
 
 // ── Proactive Argos system — makes Argos alive ──
 #define IDT_PROACTIVE 1003
 #define IDT_PROACTIVE_BUBBLE_TIMEOUT 1004
+#define IDT_VOICE_DELAYED 1005
 static bool g_proactiveActive = true;
 static bool g_proactiveBusy = false;
 static HWND g_proactiveBubble = nullptr;
@@ -485,7 +630,6 @@ static void UpdateThinkingDots(HWND hwnd) {
 }
 
 // Global handles
-static WindowManager* g_windowMgr = nullptr;
 static RobotRenderer* g_renderer = nullptr;
 static AgentClient* g_agent = nullptr;
 static TrayIcon* g_tray = nullptr;
@@ -494,9 +638,6 @@ static TrayIcon* g_tray = nullptr;
 #define ANIMATE_INTERVAL_MS 16
 
 // Manga bubble control IDs
-#define IDC_BUBBLE_EDIT   3001
-#define IDC_BUBBLE_SEND   3002
-#define IDC_BUBBLE_VOICE  3003
 #define IDC_BUBBLE_CANCEL 3004
 #define IDC_BUBBLE_TITLE  3005
 #define IDC_BUBBLE_SETTINGS 3006
@@ -535,7 +676,6 @@ static bool g_ragSyncDone = true;
 // Color-key transparency (magenta = transparent) makes only the bubble
 // visible — no window frame, just the bubble shape.
 
-static HWND g_bubbleHwnd = nullptr;
 static HFONT g_bubbleFont = nullptr;
 static HFONT g_bubbleTitleFont = nullptr;
 static HBRUSH g_bubbleBgBrush = nullptr;
@@ -1170,7 +1310,7 @@ static LRESULT CALLBACK BubbleWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
                     DestroyWindow(hwnd);
                     return 0;
                 case IDC_BUBBLE_VOICE:
-                    MessageBoxW(hwnd, L"Voice input coming soon!", L"Argos", MB_OK | MB_ICONINFORMATION);
+                    StartVoiceRecording(hwnd);
                     return 0;
             }
             break;
@@ -1291,6 +1431,29 @@ static LRESULT CALLBACK BubbleWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             RefreshConversation(hwnd);
             SetFocus(GetDlgItem(hwnd, IDC_BUBBLE_EDIT));
             if (g_renderer) g_renderer->SetThinking(false);
+            return 0;
+        }
+        case WM_VOICE_RESULT: {
+            std::wstring transcribed;
+            {
+                std::lock_guard<std::mutex> lk(g_voiceMutex);
+                transcribed = g_voiceTranscribedText;
+            }
+
+            if (transcribed.empty()) {
+                // No speech detected
+                HWND hEdit = GetDlgItem(hwnd, IDC_BUBBLE_EDIT);
+                if (hEdit) SetWindowTextW(hEdit, L"");
+                MessageBoxW(hwnd, L"No speech detected. Please try again.",
+                    L"Argos Voice", MB_OK | MB_ICONINFORMATION);
+            } else {
+                // Put transcribed text in the edit box
+                HWND hEdit = GetDlgItem(hwnd, IDC_BUBBLE_EDIT);
+                if (hEdit) SetWindowTextW(hEdit, transcribed.c_str());
+
+                // Auto-send the message
+                SendMessageW(hwnd, WM_COMMAND, MAKEWPARAM(IDC_BUBBLE_SEND, BN_CLICKED), 0);
+            }
             return 0;
         }
         case WM_RAG_SYNC_PROGRESS: {
@@ -1804,6 +1967,13 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 }
                 return 0;
             }
+            else if (wParam == IDT_VOICE_DELAYED) {
+                KillTimer(hwnd, IDT_VOICE_DELAYED);
+                if (g_bubbleHwnd) {
+                    StartVoiceRecording(g_bubbleHwnd, 30);
+                }
+                return 0;
+            }
             return 0;
         }
 
@@ -1817,6 +1987,20 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             }
             // Timer restarts when bubble is destroyed (WM_DESTROY in ProactiveBubbleProc)
             // This ensures 10 seconds starts AFTER the bubble disappears
+            return 0;
+        }
+
+        case WM_CAPSLOCK_PUSHTOTALK: {
+            // Caps Lock pressed — start push-to-talk
+            // If bubble is open, record into it; otherwise open bubble first
+            if (g_bubbleHwnd) {
+                StartVoiceRecording(g_bubbleHwnd, 30);
+            } else {
+                // Show the bubble, then start recording after a short delay
+                StopProactiveTimer(hwnd);
+                ShowMangaBubble((HINSTANCE)GetWindowLongPtr(hwnd, GWLP_HINSTANCE), hwnd);
+                SetTimer(hwnd, IDT_VOICE_DELAYED, 100, nullptr);
+            }
             return 0;
         }
 
@@ -1873,6 +2057,8 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             KillTimer(hwnd, IDT_ANIMATE);
             KillTimer(hwnd, IDT_PROACTIVE);
             CloseProactiveBubble();
+            // Uninstall keyboard hook
+            if (g_kbHook) { UnhookWindowsHookEx(g_kbHook); g_kbHook = nullptr; }
             if (g_renderer) { delete g_renderer; g_renderer = nullptr; }
             PostQuitMessage(0);
             return 0;
@@ -1910,6 +2096,9 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
     g_agent->SetVisionModel(L"Qwen3.6-35B-A3B");        // Vision: OCR/screen analysis only
 
     g_windowMgr->Show();
+
+    // Install low-level keyboard hook for Caps Lock push-to-talk
+    g_kbHook = SetWindowsHookExW(WH_KEYBOARD_LL, LowLevelKbProc, hInstance, 0);
 
     MSG msg;
     while (GetMessage(&msg, nullptr, 0, 0)) {

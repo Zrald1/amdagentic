@@ -1,6 +1,7 @@
 #pragma once
 #include <string>
 #include <vector>
+#include <functional>
 
 // Argos Tools — unified interface to all C++ AI tool libraries.
 // Gives Argos built-in capabilities for file search, browser automation,
@@ -134,6 +135,40 @@ bool rag_memory_init(const std::string& db_path = "");
 bool rag_memory_save_conversation(const std::string& role, const std::string& content);
 std::string rag_memory_load_conversation(size_t max_messages = 20);
 bool rag_memory_clear();
+
+// ── RAG Manual Sync — user-controlled folder indexing ──
+// RAG no longer auto-indexes the working directory. The user must explicitly
+// sync one or more of: Desktop, Documents, Downloads, Music, Videos from Settings.
+// If nothing is synced, RAG is skipped entirely in the chat pipeline (no errors).
+
+struct RagFolderInfo {
+    std::string label;   // "Desktop", "Documents", "Downloads", "Music", "Videos"
+    std::string path;    // Full path on disk
+    bool synced = false; // Whether this folder has been indexed
+    int file_count = 0;  // Number of files indexed (after sync)
+};
+
+// Get the list of available folders (Desktop/Documents/Downloads/Music/Videos)
+// with their current sync status.
+std::vector<RagFolderInfo> rag_get_available_folders();
+
+// Synchronously index one folder by label ("Desktop", "Documents", etc.).
+// Calls progress_cb(percent 0-100) periodically as files are processed.
+// Safe to call from a background thread. Returns true on success.
+bool rag_sync_folder(const std::string& label, const std::string& path,
+                      std::function<void(int)> progress_cb = nullptr);
+
+// Remove a previously synced folder from the RAG index.
+bool rag_unsync_folder(const std::string& label);
+
+// Clear all synced folders and their indexed data.
+void rag_clear_sync();
+
+// True if at least one folder has been synced (RAG is usable).
+bool rag_is_synced();
+
+// True while a sync operation is currently running.
+bool rag_is_syncing();
 
 // ── Tool Dispatch ──
 

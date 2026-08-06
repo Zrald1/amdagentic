@@ -11,10 +11,122 @@
 #include <iomanip>
 #include <unordered_set>
 #include <algorithm>
+#include <mutex>
+#include <atomic>
 
 namespace argos_tools {
 
 namespace fs = std::filesystem;
+
+// ── RAG Manual Sync State ──
+// RAG is OFF by default. The user must explicitly sync a folder from Settings
+// before any RAG search is performed. This avoids auto-indexing large/irrelevant
+// directories on every chat message (which was slow and error-prone).
+namespace {
+    std::mutex g_ragMutex;
+    std::vector<std::string> g_ragSyncedLabels;
+    std::vector<std::string> g_ragSyncedPaths;
+    std::vector<aisearch::ContentIndex> g_ragIndices;
+    std::atomic<bool> g_ragSyncing{false};
+}
+
+std::string get_user_profile_dir() {
+    char buf[MAX_PATH] = {};
+    DWORD len = GetEnvironmentVariableA("USERPROFILE", buf, MAX_PATH);
+    if (len == 0 || len >= MAX_PATH) return "";
+    return std::string(buf);
+}
+
+std::vector<RagFolderInfo> rag_get_available_folders() {
+    std::string home = get_user_profile_dir();
+    std::vector<RagFolderInfo> folders = {
+        {"Desktop",   home + "\\Desktop"},
+        {"Documents", home + "\\Documents"},
+        {"Downloads", home + "\\Downloads"},
+        {"Music",     home + "\\Music"},
+        {"Videos",    home + "\\Videos"},
+    };
+
+    std::lock_guard<std::mutex> lock(g_ragMutex);
+    for (auto& f : folders) {
+        for (size_t i = 0; i < g_ragSyncedLabels.size(); i++) {
+            if (g_ragSyncedLabels[i] == f.label) {
+                f.synced = true;
+                f.file_count = static_cast<int>(
+                    g_ragIndices[i].total_text_indexed + g_ragIndices[i].total_images_indexed);
+                break;
+            }
+        }
+    }
+    return folders;
+}
+
+bool rag_sync_folder(const std::string& label, const std::string& path,
+                      std::function<void(int)> progress_cb) {
+    g_ragSyncing.store(true);
+    try {
+        if (path.empty() || !fs::exists(path)) {
+            g_ragSyncing.store(false);
+            if (progress_cb) progress_cb(-1); // signal error
+            return false;
+        }
+
+        auto index = aisearch::index_directory_with_progress(path, false, progress_cb);
+
+        {
+            std::lock_guard<std::mutex> lock(g_ragMutex);
+            // Replace any existing sync for this label
+            for (size_t i = 0; i < g_ragSyncedLabels.size(); ) {
+                if (g_ragSyncedLabels[i] == label) {
+                    g_ragSyncedLabels.erase(g_ragSyncedLabels.begin() + i);
+                    g_ragSyncedPaths.erase(g_ragSyncedPaths.begin() + i);
+                    g_ragIndices.erase(g_ragIndices.begin() + i);
+                } else {
+                    i++;
+                }
+            }
+            g_ragSyncedLabels.push_back(label);
+            g_ragSyncedPaths.push_back(path);
+            g_ragIndices.push_back(std::move(index));
+        }
+
+        g_ragSyncing.store(false);
+        return true;
+    } catch (...) {
+        g_ragSyncing.store(false);
+        if (progress_cb) progress_cb(-1);
+        return false;
+    }
+}
+
+bool rag_unsync_folder(const std::string& label) {
+    std::lock_guard<std::mutex> lock(g_ragMutex);
+    for (size_t i = 0; i < g_ragSyncedLabels.size(); i++) {
+        if (g_ragSyncedLabels[i] == label) {
+            g_ragSyncedLabels.erase(g_ragSyncedLabels.begin() + i);
+            g_ragSyncedPaths.erase(g_ragSyncedPaths.begin() + i);
+            g_ragIndices.erase(g_ragIndices.begin() + i);
+            return true;
+        }
+    }
+    return false;
+}
+
+void rag_clear_sync() {
+    std::lock_guard<std::mutex> lock(g_ragMutex);
+    g_ragSyncedLabels.clear();
+    g_ragSyncedPaths.clear();
+    g_ragIndices.clear();
+}
+
+bool rag_is_synced() {
+    std::lock_guard<std::mutex> lock(g_ragMutex);
+    return !g_ragIndices.empty();
+}
+
+bool rag_is_syncing() {
+    return g_ragSyncing.load();
+}
 
 // ── AI Search ──
 
@@ -389,27 +501,37 @@ std::string build_contextual_chunk(const std::string& file_path, const std::stri
 
 std::string rag_search(const std::string& query, const std::string& dir_path, size_t top_k) {
     try {
-        // Step 1: Determine search directory
-        std::string searchPath = dir_path;
-        if (searchPath.empty()) {
-            char cwd[MAX_PATH] = {};
-            GetCurrentDirectoryA(MAX_PATH, cwd);
-            searchPath = cwd;
+        size_t candidate_k = top_k * 4; // retrieve 4x candidates, rerank down
+        std::vector<RRFEntry> fused;
+        std::string searchLabel;
+
+        if (!dir_path.empty()) {
+            // Explicit directory requested (manual tool use) — index on-the-fly.
+            auto index = aisearch::index_directory(dir_path, false);
+            auto dense_hits = aisearch::search_text(index, query, candidate_k);
+            auto bm25_hits = aisearch::search_bm25(index, query, candidate_k);
+            fused = reciprocal_rank_fusion(dense_hits, bm25_hits, top_k);
+            searchLabel = dir_path;
+        } else {
+            // Default path: search across manually synced folders ONLY.
+            // If nothing is synced, RAG is skipped (sentinel string) — no auto-indexing.
+            std::lock_guard<std::mutex> lock(g_ragMutex);
+            if (g_ragIndices.empty()) {
+                return "RAG_NOT_SYNCED";
+            }
+            // Search each synced folder's index separately (each has its own chunk-id
+            // space), then merge the fused results to avoid cross-folder id collisions.
+            for (const auto& index : g_ragIndices) {
+                auto dense_hits = aisearch::search_text(index, query, candidate_k);
+                auto bm25_hits = aisearch::search_bm25(index, query, candidate_k);
+                auto folderFused = reciprocal_rank_fusion(dense_hits, bm25_hits, top_k);
+                fused.insert(fused.end(), folderFused.begin(), folderFused.end());
+            }
+            searchLabel = "synced folders";
         }
 
-        // Step 2: Index the directory
-        auto index = aisearch::index_directory(searchPath, false);
-
-        // Step 3: Run hybrid search — TF-IDF (dense) + BM25 (sparse) in parallel
-        size_t candidate_k = top_k * 4; // retrieve 4x candidates, rerank down
-        auto dense_hits = aisearch::search_text(index, query, candidate_k);
-        auto bm25_hits = aisearch::search_bm25(index, query, candidate_k);
-
-        // Step 4: Fuse results via Reciprocal Rank Fusion (RRF)
-        auto fused = reciprocal_rank_fusion(dense_hits, bm25_hits, top_k);
-
         if (fused.empty()) {
-            return "No relevant files found in " + searchPath;
+            return "No relevant files found in " + searchLabel;
         }
 
         // Step 5: Rerank with query-chunk term overlap scoring
@@ -430,7 +552,7 @@ std::string rag_search(const std::string& query, const std::string& dir_path, si
         size_t num_results = (std::min)(fused.size(), top_k);
         std::ostringstream oss;
         oss << "Local knowledge retrieval (RAG) found " << num_results
-            << " relevant text passages from your project files.\n"
+            << " relevant text passages from your synced folders.\n"
             << "Retrieval method: Hybrid (TF-IDF + BM25) with RRF fusion + reranking\n\n";
 
         for (size_t i = 0; i < num_results; i++) {
@@ -585,6 +707,12 @@ bool rag_memory_clear() {
 // RAG with persistent memory — saves conversation to disk
 std::string rag_search_with_memory(const std::string& query, const std::string& dir_path, size_t top_k) {
     try {
+        // If RAG is not synced and no explicit dir_path given, skip entirely —
+        // don't touch memory or run any search. Prevents auto-indexing and errors.
+        if (dir_path.empty() && !rag_is_synced()) {
+            return "RAG_NOT_SYNCED";
+        }
+
         // Save the query to memory
         rag_memory_save_conversation("user", query);
 
@@ -593,7 +721,8 @@ std::string rag_search_with_memory(const std::string& query, const std::string& 
 
         // Save the RAG context to memory
         if (result.find("No relevant files") == std::string::npos &&
-            result.find("RAG search error") == std::string::npos) {
+            result.find("RAG search error") == std::string::npos &&
+            result.find("RAG_NOT_SYNCED") == std::string::npos) {
             rag_memory_save_conversation("system_rag", result);
         }
 

@@ -237,6 +237,12 @@ void AgentClient::InitSystemPrompt() {
         L"Always explain what you're doing briefly, then include the tool tag. "
         L"For example: 'Opening Notepad for you. [TOOL:run notepad]' "
         L"or 'Searching your project files for that. [TOOL:search_files C:\\projects|error handling]'\n"
+        L"\n--- Browser Tasks ---\n"
+        L"For web searches: use [TOOL:search <query>] to open Google search results.\n"
+        L"For direct URLs: use [TOOL:browser_navigate <url>] to open a specific website.\n"
+        L"After opening a browser, give a natural response — do NOT call browser_content, browser_title, "
+        L"or browser_url repeatedly. The browser is now open and the user can see it. "
+        L"Just tell the user what you opened and stop. Do NOT loop waiting for page content.\n"
         L"\n--- Task Planning ---\n"
         L"For complex multi-step requests, start with a plan:\n"
         L"[PLAN: step 1 description | step 2 description | step 3 description]\n"
@@ -259,29 +265,32 @@ std::wstring AgentClient::Chat(const std::wstring& userMessage) {
     // Add user message to history
     m_history.push_back({L"user", userMessage});
 
-    // ── Automatic RAG: search local files for relevant context ──
+    // ── Manual RAG: only runs if the user has synced a folder from Settings ──
     // Uses modern hybrid pipeline: TF-IDF + BM25 + RRF fusion + reranking + contextual chunking
-    // Also saves conversation to persistent memory (JSONL file in %APPDATA%/Argos/)
-    std::string utf8Query = WideToUtf8(userMessage);
-    std::string ragContext = argos_tools::rag_search_with_memory(utf8Query, "", 5);
+    // Skipped entirely (no error, no overhead) if nothing has been synced.
+    if (argos_tools::rag_is_synced()) {
+        std::string utf8Query = WideToUtf8(userMessage);
+        std::string ragContext = argos_tools::rag_search_with_memory(utf8Query, "", 5);
 
-    // If RAG found relevant content, inject it as a system context message
-    // before the user's question (only if results are meaningful)
-    if (ragContext.find("No relevant files") == std::string::npos &&
-        ragContext.find("RAG search error") == std::string::npos &&
-        ragContext.size() > 50) {
-        // Convert RAG context to wide string
-        int wlen = MultiByteToWideChar(CP_UTF8, 0, ragContext.c_str(),
-                                       (int)ragContext.size(), nullptr, 0);
-        if (wlen > 0) {
-            std::wstring wRagContext(wlen, 0);
-            MultiByteToWideChar(CP_UTF8, 0, ragContext.c_str(),
-                               (int)ragContext.size(), &wRagContext[0], wlen);
-            // Add as a system context message before the user message
-            m_history.insert(m_history.end() - 1, {L"system",
-                L"[Local Knowledge Context — Retrieved via RAG from your project files]\n" +
-                wRagContext +
-                L"\n[End of RAG Context] Use this information to help answer the user's question if relevant."});
+        // If RAG found relevant content, inject it as a system context message
+        // before the user's question (only if results are meaningful)
+        if (ragContext.find("No relevant files") == std::string::npos &&
+            ragContext.find("RAG search error") == std::string::npos &&
+            ragContext.find("RAG_NOT_SYNCED") == std::string::npos &&
+            ragContext.size() > 50) {
+            // Convert RAG context to wide string
+            int wlen = MultiByteToWideChar(CP_UTF8, 0, ragContext.c_str(),
+                                           (int)ragContext.size(), nullptr, 0);
+            if (wlen > 0) {
+                std::wstring wRagContext(wlen, 0);
+                MultiByteToWideChar(CP_UTF8, 0, ragContext.c_str(),
+                                   (int)ragContext.size(), &wRagContext[0], wlen);
+                // Add as a system context message before the user message
+                m_history.insert(m_history.end() - 1, {L"system",
+                    L"[Local Knowledge Context — Retrieved via RAG from your synced folders]\n" +
+                    wRagContext +
+                    L"\n[End of RAG Context] Use this information to help answer the user's question if relevant."});
+            }
         }
     }
 
@@ -310,6 +319,16 @@ std::wstring AgentClient::Chat(const std::wstring& userMessage) {
 
         // Show the user what Argos is doing (clean text without tool tags)
         std::wstring cleanResponse = StripToolTags(response);
+
+        // If browser/search tools were called, break early — browser is open, no need to loop
+        if (response.find(L"[TOOL:search ") != std::wstring::npos ||
+            response.find(L"[TOOL:browser_navigate ") != std::wstring::npos ||
+            response.find(L"[TOOL:browser_open ") != std::wstring::npos) {
+            finalResponse = cleanResponse;
+            // Still add to history for context
+            m_history.push_back({L"assistant", response});
+            break;
+        }
 
         // Add the assistant's intermediate response to history
         m_history.push_back({L"assistant", response});
@@ -398,8 +417,8 @@ std::wstring AgentClient::ChatWithModel(const std::vector<ChatMessage>& messages
                                      WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     if (!hSession) return L"[Error: WinHttpOpen failed]";
 
-    // Set timeouts: 10s connect, 30s receive, 30s resolve
-    WinHttpSetTimeouts(hSession, 30000, 10000, 30000, 30000);
+    // Set timeouts: 10s connect, 60s receive, 60s resolve (vision model can be slow)
+    WinHttpSetTimeouts(hSession, 30000, 10000, 60000, 60000);
 
     HINTERNET hConnect = WinHttpConnect(hSession, hostName, urlComp.nPort, 0);
     if (!hConnect) { WinHttpCloseHandle(hSession); return L"[Error: WinHttpConnect failed]"; }
@@ -699,23 +718,26 @@ std::wstring AgentClient::ChatStreaming(const std::wstring& userMessage, StreamC
     // Add user message to history
     m_history.push_back({L"user", userMessage});
 
-    // Automatic RAG with memory
-    std::string utf8Query = WideToUtf8(userMessage);
-    std::string ragContext = argos_tools::rag_search_with_memory(utf8Query, "", 5);
+    // Manual RAG with memory — only runs if user has synced a folder from Settings
+    if (argos_tools::rag_is_synced()) {
+        std::string utf8Query = WideToUtf8(userMessage);
+        std::string ragContext = argos_tools::rag_search_with_memory(utf8Query, "", 5);
 
-    if (ragContext.find("No relevant files") == std::string::npos &&
-        ragContext.find("RAG search error") == std::string::npos &&
-        ragContext.size() > 50) {
-        int wlen = MultiByteToWideChar(CP_UTF8, 0, ragContext.c_str(),
-                                       (int)ragContext.size(), nullptr, 0);
-        if (wlen > 0) {
-            std::wstring wRagContext(wlen, 0);
-            MultiByteToWideChar(CP_UTF8, 0, ragContext.c_str(),
-                               (int)ragContext.size(), &wRagContext[0], wlen);
-            m_history.insert(m_history.end() - 1, {L"system",
-                L"[Local Knowledge Context — Retrieved via RAG from your project files]\n" +
-                wRagContext +
-                L"\n[End of RAG Context] Use this information to help answer the user's question if relevant."});
+        if (ragContext.find("No relevant files") == std::string::npos &&
+            ragContext.find("RAG search error") == std::string::npos &&
+            ragContext.find("RAG_NOT_SYNCED") == std::string::npos &&
+            ragContext.size() > 50) {
+            int wlen = MultiByteToWideChar(CP_UTF8, 0, ragContext.c_str(),
+                                           (int)ragContext.size(), nullptr, 0);
+            if (wlen > 0) {
+                std::wstring wRagContext(wlen, 0);
+                MultiByteToWideChar(CP_UTF8, 0, ragContext.c_str(),
+                                   (int)ragContext.size(), &wRagContext[0], wlen);
+                m_history.insert(m_history.end() - 1, {L"system",
+                    L"[Local Knowledge Context — Retrieved via RAG from your synced folders]\n" +
+                    wRagContext +
+                    L"\n[End of RAG Context] Use this information to help answer the user's question if relevant."});
+            }
         }
     }
 
@@ -745,6 +767,15 @@ std::wstring AgentClient::ChatStreaming(const std::wstring& userMessage, StreamC
 
         std::wstring toolResults = ExecuteTools(finalResponse);
         m_history.push_back({L"assistant", finalResponse});
+
+        // If browser/search tools were called, break early — browser is open, no need to loop
+        if (finalResponse.find(L"[TOOL:search ") != std::wstring::npos ||
+            finalResponse.find(L"[TOOL:browser_navigate ") != std::wstring::npos ||
+            finalResponse.find(L"[TOOL:browser_open ") != std::wstring::npos) {
+            finalResponse = StripToolTags(finalResponse);
+            break;
+        }
+
         m_history.push_back({L"system", L"[Tool Results]\n" + toolResults});
 
         if (m_history.size() > 30) {

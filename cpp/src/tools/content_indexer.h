@@ -6,6 +6,7 @@
 #include <string>
 #include <vector>
 #include <unordered_map>
+#include <functional>
 
 namespace aisearch {
 
@@ -36,6 +37,12 @@ struct ContentIndex {
 // - Indexes text files into the vector store (chunked, TF-IDF)
 // - Fingerprints all image files
 ContentIndex index_directory(const std::string& root_path, bool include_hidden = false);
+
+// Index a directory with progress reporting (0-100). Used for manual RAG folder sync.
+// progress_cb is called periodically as files are processed (may be called from a
+// background thread — caller is responsible for marshaling to UI thread if needed).
+ContentIndex index_directory_with_progress(const std::string& root_path, bool include_hidden,
+                                            const std::function<void(int)>& progress_cb);
 
 // Index with .gitignore support
 ContentIndex index_directory_with_gitignore(const std::string& root_path, bool include_hidden = false);

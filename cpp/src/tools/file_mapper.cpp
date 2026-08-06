@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <chrono>
 #include <ctime>
+#include <unordered_set>
 
 namespace aisearch {
 
@@ -59,6 +60,12 @@ ScanResult scan_directory(const std::string& root_path, bool include_hidden) {
     }
 
     std::error_code ec;
+    // Directories to always skip: build artifacts, VCS metadata, scratch/test dirs
+    static const std::unordered_set<std::string> skip_dirs = {
+        "build", ".git", ".vs", ".vscode", "node_modules", "__pycache__",
+        "C++ tools for AI", "test_data", "Debug", "Release", "x64", "x86",
+        "bin", "obj", ".idea"
+    };
     for (auto it = fs::recursive_directory_iterator(root, fs::directory_options::skip_permission_denied, ec); it != fs::recursive_directory_iterator(); ) {
         if (ec) {
             ec.clear();
@@ -75,6 +82,17 @@ ScanResult scan_directory(const std::string& root_path, bool include_hidden) {
             it.disable_recursion_pending();
             it.increment(ec);
             continue;
+            }
+        }
+
+        // Skip known build/scratch/vcs directories entirely (don't recurse into them)
+        {
+            std::string name = entry.path().filename().string();
+            bool isDir = entry.is_directory(ec);
+            if (isDir && skip_dirs.count(name)) {
+                it.disable_recursion_pending();
+                it.increment(ec);
+                continue;
             }
         }
 

@@ -478,6 +478,23 @@ static TrayIcon* g_tray = nullptr;
 #define IDC_BUBBLE_EXPAND     3016
 #define IDC_BUBBLE_SHRINK     3017
 
+// RAG manual sync controls
+#define IDC_RAG_LABEL      3018
+#define IDC_RAG_DESKTOP    3019
+#define IDC_RAG_DOCUMENTS  3020
+#define IDC_RAG_DOWNLOADS  3021
+#define IDC_RAG_MUSIC      3022
+#define IDC_RAG_VIDEOS     3023
+#define IDC_RAG_SYNC_BTN   3024
+#define IDC_RAG_STATUS     3025
+
+// Custom message posted from the background sync thread to update RAG UI
+#define WM_RAG_SYNC_PROGRESS (WM_USER + 104)
+
+static std::mutex g_ragUiMutex;
+static std::wstring g_ragStatusText = L"RAG: not synced (select folders below)";
+static bool g_ragSyncDone = true;
+
 // ── Modern manga speech bubble — neon blue + white ─────────────────────
 // Design: clean webtoon-style rounded rectangle, white background, neon
 // blue (#00CFFF) outline with a soft glow halo, neon blue accent header
@@ -547,15 +564,15 @@ static LRESULT CALLBACK InputEditProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
 static LRESULT CALLBACK BubbleWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
         case WM_CREATE: {
-            g_bubbleFont = CreateFontW(15, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+            g_bubbleFont = CreateFontW(16, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
                 DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
-            g_bubbleTitleFont = CreateFontW(17, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+                CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI Semibold");
+            g_bubbleTitleFont = CreateFontW(19, 0, 0, 0, FW_EXTRABOLD, FALSE, FALSE, FALSE,
                 DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
-            g_bubbleSmallFont = CreateFontW(12, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI Black");
+            g_bubbleSmallFont = CreateFontW(13, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
                 DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
+                CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI Semibold");
             g_bubbleBgBrush = CreateSolidBrush(RGB(255, 255, 255));
             g_bubbleEditBgBrush = CreateSolidBrush(RGB(250, 253, 255));
 
@@ -653,11 +670,46 @@ static LRESULT CALLBACK BubbleWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
                 100, 302, 212, 20, hwnd, (HMENU)IDC_BUBBLE_MODEL, nullptr, nullptr);
             SendMessageW(hModel, WM_SETFONT, (WPARAM)g_bubbleSmallFont, TRUE);
 
+            // ── RAG manual sync section ──
+            // RAG only indexes folders the user explicitly selects and syncs.
+            // No automatic indexing — prevents slow/error-prone scanning.
+            HWND hRagLabel = CreateWindowExW(0, L"STATIC", L"RAG: Sync Folders (manual)",
+                WS_CHILD | SS_LEFT, 28, 330, 280, 16, hwnd, (HMENU)IDC_RAG_LABEL, nullptr, nullptr);
+            SendMessageW(hRagLabel, WM_SETFONT, (WPARAM)g_bubbleSmallFont, TRUE);
+
+            HWND hCbDesktop = CreateWindowExW(0, L"BUTTON", L"Desktop",
+                WS_CHILD | BS_AUTOCHECKBOX, 28, 348, 130, 18, hwnd, (HMENU)IDC_RAG_DESKTOP, nullptr, nullptr);
+            SendMessageW(hCbDesktop, WM_SETFONT, (WPARAM)g_bubbleSmallFont, TRUE);
+
+            HWND hCbDocuments = CreateWindowExW(0, L"BUTTON", L"Documents",
+                WS_CHILD | BS_AUTOCHECKBOX, 180, 348, 130, 18, hwnd, (HMENU)IDC_RAG_DOCUMENTS, nullptr, nullptr);
+            SendMessageW(hCbDocuments, WM_SETFONT, (WPARAM)g_bubbleSmallFont, TRUE);
+
+            HWND hCbDownloads = CreateWindowExW(0, L"BUTTON", L"Downloads",
+                WS_CHILD | BS_AUTOCHECKBOX, 28, 368, 130, 18, hwnd, (HMENU)IDC_RAG_DOWNLOADS, nullptr, nullptr);
+            SendMessageW(hCbDownloads, WM_SETFONT, (WPARAM)g_bubbleSmallFont, TRUE);
+
+            HWND hCbMusic = CreateWindowExW(0, L"BUTTON", L"Music",
+                WS_CHILD | BS_AUTOCHECKBOX, 180, 368, 130, 18, hwnd, (HMENU)IDC_RAG_MUSIC, nullptr, nullptr);
+            SendMessageW(hCbMusic, WM_SETFONT, (WPARAM)g_bubbleSmallFont, TRUE);
+
+            HWND hCbVideos = CreateWindowExW(0, L"BUTTON", L"Videos",
+                WS_CHILD | BS_AUTOCHECKBOX, 28, 388, 130, 18, hwnd, (HMENU)IDC_RAG_VIDEOS, nullptr, nullptr);
+            SendMessageW(hCbVideos, WM_SETFONT, (WPARAM)g_bubbleSmallFont, TRUE);
+
+            HWND hRagSyncBtn = CreateWindowExW(0, L"BUTTON", L"Sync Now",
+                WS_CHILD | BS_PUSHBUTTON, 180, 386, 130, 22, hwnd, (HMENU)IDC_RAG_SYNC_BTN, nullptr, nullptr);
+            SendMessageW(hRagSyncBtn, WM_SETFONT, (WPARAM)g_bubbleSmallFont, TRUE);
+
+            HWND hRagStatus = CreateWindowExW(0, L"STATIC", g_ragStatusText.c_str(),
+                WS_CHILD | SS_LEFT, 28, 414, 284, 34, hwnd, (HMENU)IDC_RAG_STATUS, nullptr, nullptr);
+            SendMessageW(hRagStatus, WM_SETFONT, (WPARAM)g_bubbleSmallFont, TRUE);
+
             // Pre-fill settings from g_agent defaults
             if (g_agent) {
                 SetWindowTextW(hUrl, L"https://developer.amd.com.cn/radeon/api/v1");
                 SetWindowTextW(hKey, L"rc-c042ad0acc56669f7b46e70f924189b5ac51664ce329f5b2");
-                SetWindowTextW(hModel, L"Qwen3.6-35B-A3B");
+                SetWindowTextW(hModel, L"DeepSeek-V4-Flash");
             }
 
             // Show existing conversation if any
@@ -875,6 +927,14 @@ static LRESULT CALLBACK BubbleWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
                         // Update conversation display with user message + loading
                         RefreshConversation(hwnd);
 
+                        // Force scroll to bottom after sending
+                        HWND hConvo = GetDlgItem(hwnd, IDC_BUBBLE_CONVO);
+                        if (hConvo) {
+                            LRESULT textLen = SendMessageW(hConvo, WM_GETTEXTLENGTH, 0, 0);
+                            SendMessageW(hConvo, EM_SETSEL, textLen, textLen);
+                            SendMessageW(hConvo, EM_SCROLLCARET, 0, 0);
+                        }
+
                         // Launch async chat thread with streaming
                         std::thread([hwnd]() {
                             {
@@ -903,11 +963,71 @@ static LRESULT CALLBACK BubbleWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
                     }
                     return 0;
                 }
+                case IDC_RAG_SYNC_BTN: {
+                    // Gather checked folders
+                    std::vector<std::pair<std::string,std::string>> toSync;
+                    auto folders = argos_tools::rag_get_available_folders();
+                    int cbIds[] = { IDC_RAG_DESKTOP, IDC_RAG_DOCUMENTS, IDC_RAG_DOWNLOADS, IDC_RAG_MUSIC, IDC_RAG_VIDEOS };
+                    for (size_t i = 0; i < folders.size() && i < 5; i++) {
+                        HWND hCb = GetDlgItem(hwnd, cbIds[i]);
+                        if (hCb && SendMessageW(hCb, BM_GETCHECK, 0, 0) == BST_CHECKED) {
+                            toSync.push_back({folders[i].label, folders[i].path});
+                        }
+                    }
+                    if (toSync.empty()) {
+                        g_ragStatusText = L"Select at least one folder to sync.";
+                        HWND hStatus = GetDlgItem(hwnd, IDC_RAG_STATUS);
+                        if (hStatus) SetWindowTextW(hStatus, g_ragStatusText.c_str());
+                        return 0;
+                    }
+                    // Disable sync button while working
+                    EnableWindow(GetDlgItem(hwnd, IDC_RAG_SYNC_BTN), FALSE);
+                    g_ragSyncDone = false;
+                    g_ragStatusText = L"Syncing...";
+                    HWND hStatus = GetDlgItem(hwnd, IDC_RAG_STATUS);
+                    if (hStatus) SetWindowTextW(hStatus, g_ragStatusText.c_str());
+
+                    // Run sync in background thread
+                    std::thread([hwnd, toSync]() {
+                        // Clear previous sync state
+                        argos_tools::rag_clear_sync();
+                        int totalFolders = (int)toSync.size();
+                        int doneFolders = 0;
+                        for (auto& f : toSync) {
+                            // Post progress: starting folder
+                            {
+                                std::lock_guard<std::mutex> lk(g_ragUiMutex);
+                                g_ragStatusText = L"Syncing " + std::wstring(f.first.begin(), f.first.end()) + L"...";
+                            }
+                            PostMessageW(hwnd, WM_RAG_SYNC_PROGRESS, 0, 0);
+
+                            argos_tools::rag_sync_folder(f.first, f.second, [&](int pct) {
+                                {
+                                    std::lock_guard<std::mutex> lk(g_ragUiMutex);
+                                    g_ragStatusText = L"Syncing " + std::wstring(f.first.begin(), f.first.end())
+                                        + L": " + std::to_wstring(pct) + L"%";
+                                }
+                                PostMessageW(hwnd, WM_RAG_SYNC_PROGRESS, 0, 0);
+                            });
+                            doneFolders++;
+                        }
+                        {
+                            std::lock_guard<std::mutex> lk(g_ragUiMutex);
+                            g_ragStatusText = L"RAG sync complete (" + std::to_wstring(totalFolders) + L" folders)";
+                            g_ragSyncDone = true;
+                        }
+                        PostMessageW(hwnd, WM_RAG_SYNC_PROGRESS, 1, 0); // wParam=1 signals completion
+                    }).detach();
+                    return 0;
+                }
                 case IDC_BUBBLE_SETTINGS: {
                     g_settingsVisible = !g_settingsVisible;
                     int ids[] = { IDC_BUBBLE_URL_LABEL, IDC_BUBBLE_URL,
                                   IDC_BUBBLE_KEY_LABEL, IDC_BUBBLE_KEY,
-                                  IDC_BUBBLE_MODEL_LABEL, IDC_BUBBLE_MODEL };
+                                  IDC_BUBBLE_MODEL_LABEL, IDC_BUBBLE_MODEL,
+                                  IDC_RAG_LABEL, IDC_RAG_DESKTOP, IDC_RAG_DOCUMENTS,
+                                  IDC_RAG_DOWNLOADS, IDC_RAG_MUSIC, IDC_RAG_VIDEOS,
+                                  IDC_RAG_SYNC_BTN, IDC_RAG_STATUS };
                     for (int id : ids) {
                         HWND ctl = GetDlgItem(hwnd, id);
                         if (ctl) ShowWindow(ctl, g_settingsVisible ? SW_SHOW : SW_HIDE);
@@ -916,7 +1036,7 @@ static LRESULT CALLBACK BubbleWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
                     HWND hList = GetDlgItem(hwnd, IDC_BUBBLE_HISTORY_LIST);
                     if (hList) ShowWindow(hList, SW_HIDE);
 
-                    int newH = g_settingsVisible ? 460 : 280;
+                    int newH = g_settingsVisible ? 500 : 280;
                     RECT rc; GetWindowRect(hwnd, &rc);
                     int newW = 340;
                     SetWindowPos(hwnd, HWND_TOPMOST, rc.left, rc.top - (newH - (rc.bottom - rc.top)),
@@ -935,7 +1055,7 @@ static LRESULT CALLBACK BubbleWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
                         g_btnData[4].label = L"Shrink";
                     } else {
                         g_btnData[4].label = L"Expand";
-                        int newH = g_settingsVisible ? 460 : 280;
+                        int newH = g_settingsVisible ? 500 : 280;
                         RECT rc2; GetWindowRect(hwnd, &rc2);
                         SetWindowPos(hwnd, HWND_TOPMOST, rc2.left, rc2.top, 340, newH, SWP_SHOWWINDOW);
                     }
@@ -1033,6 +1153,19 @@ static LRESULT CALLBACK BubbleWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             RefreshConversation(hwnd);
             SetFocus(GetDlgItem(hwnd, IDC_BUBBLE_EDIT));
             if (g_renderer) g_renderer->SetThinking(false);
+            return 0;
+        }
+        case WM_RAG_SYNC_PROGRESS: {
+            // Update RAG status label from g_ragStatusText
+            {
+                std::lock_guard<std::mutex> lk(g_ragUiMutex);
+                HWND hStatus = GetDlgItem(hwnd, IDC_RAG_STATUS);
+                if (hStatus) SetWindowTextW(hStatus, g_ragStatusText.c_str());
+            }
+            if (wParam == 1) {
+                // Sync complete — re-enable button
+                EnableWindow(GetDlgItem(hwnd, IDC_RAG_SYNC_BTN), TRUE);
+            }
             return 0;
         }
         case WM_CLOSE:
@@ -1136,31 +1269,54 @@ static LRESULT CALLBACK ProactiveBubbleProc(HWND hwnd, UINT msg, WPARAM wParam, 
             LineTo(memDC, tailX, bB + tailH);
             LineTo(memDC, tailX + tailW, bB);
 
-            // Draw the message text — LARGE font for readability
-            HFONT msgFont = CreateFontW(22, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+            // Draw the message text — LARGE bold font for manga-style readability
+            HFONT msgFont = CreateFontW(24, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
                 DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
+                CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI Semibold");
             HFONT oldFont = (HFONT)SelectObject(memDC, msgFont);
             SetBkMode(memDC, TRANSPARENT);
 
-            // "Argos says:" label in neon blue (larger)
-            HFONT labelFont = CreateFontW(16, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+            // "Argos says:" label in neon blue (bold, manga-style)
+            HFONT labelFont = CreateFontW(17, 0, 0, 0, FW_EXTRABOLD, FALSE, FALSE, FALSE,
                 DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
+                CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI Black");
+            HFONT emojiFont = CreateFontW(24, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI Emoji");
             SelectObject(memDC, labelFont);
             SetTextColor(memDC, TEXT_NEON);
             RECT labelRect = {bL + 14, bT + 10, bR - 14, bT + 32};
             DrawTextW(memDC, L"Argos says:", -1, &labelRect, DT_LEFT | DT_SINGLELINE);
 
-            // Message body — large black text, fills remaining bubble space
+            // Message body — bold black text with colorful emoji, fills remaining bubble space
+            // Draw text character by character: regular text in bold black, emoji in color
             SelectObject(memDC, msgFont);
-            SetTextColor(memDC, RGB(0, 0, 0));
             RECT textRect = {bL + 14, bT + 36, bR - 14, bB - 8};
-            DrawTextW(memDC, g_proactiveMsg.c_str(), (int)g_proactiveMsg.size(),
-                     &textRect, DT_LEFT | DT_WORDBREAK | DT_TOP);
+            
+            // Check if message contains emoji characters
+            bool hasEmoji = false;
+            for (wchar_t c : g_proactiveMsg) {
+                if (c >= 0x1F000 || (c >= 0x2600 && c <= 0x27BF) || (c >= 0xFE00 && c <= 0xFE0F)) {
+                    hasEmoji = true;
+                    break;
+                }
+            }
+            
+            if (hasEmoji) {
+                // Draw with emoji font for colorful rendering on Windows 10+
+                SelectObject(memDC, emojiFont);
+                SetTextColor(memDC, RGB(0, 0, 0));
+                DrawTextW(memDC, g_proactiveMsg.c_str(), (int)g_proactiveMsg.size(),
+                         &textRect, DT_LEFT | DT_WORDBREAK | DT_TOP);
+            } else {
+                SetTextColor(memDC, RGB(0, 0, 0));
+                DrawTextW(memDC, g_proactiveMsg.c_str(), (int)g_proactiveMsg.size(),
+                         &textRect, DT_LEFT | DT_WORDBREAK | DT_TOP);
+            }
 
             DeleteObject(SelectObject(memDC, oldFont));
             DeleteObject(labelFont);
+            DeleteObject(emojiFont);
             DeleteObject(neonPen);
             DeleteObject(whiteBrush);
             DeleteObject(glowBrush);
@@ -1232,12 +1388,16 @@ static void ShowProactiveBubble(HWND robotHwnd, const std::wstring& message) {
     if (msgLen > 120) { bubbleW = 460; bubbleH = 200; }
     if (msgLen > 200) { bubbleW = 500; bubbleH = 240; }
 
-    // Position above the robot
+    // Position above the robot — clamp to screen edges for readability
     RECT rc;
     GetWindowRect(robotHwnd, &rc);
+    int screenW = GetSystemMetrics(SM_CXSCREEN);
     int x = rc.left + (rc.right - rc.left) / 2 - bubbleW / 2;
     int y = rc.top - bubbleH + 10;
     if (y < 0) y = rc.bottom + 10;
+    // Clamp X to keep entire bubble visible on screen
+    if (x < 4) x = 4;
+    if (x + bubbleW > screenW - 4) x = screenW - bubbleW - 4;
 
     g_proactiveBubble = CreateWindowExW(
         WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
@@ -1281,10 +1441,14 @@ static void UpdateBubblePosition(HWND robotHwnd) {
     if (g_expanded) return; // Don't reposition when expanded
     RECT rc;
     GetWindowRect(robotHwnd, &rc);
-    int bubbleW = 340, bubbleH = g_settingsVisible ? 460 : 280;
+    int bubbleW = 340, bubbleH = g_settingsVisible ? 500 : 280;
+    int screenW = GetSystemMetrics(SM_CXSCREEN);
     int x = rc.left + (rc.right - rc.left) / 2 - bubbleW / 2;
     int y = rc.top - bubbleH + 15;
     if (y < 0) y = rc.bottom + 10;
+    // Clamp X to keep entire bubble visible on screen
+    if (x < 4) x = 4;
+    if (x + bubbleW > screenW - 4) x = screenW - bubbleW - 4;
     SetWindowPos(g_bubbleHwnd, HWND_TOPMOST, x, y, bubbleW, bubbleH,
                  SWP_NOACTIVATE | SWP_SHOWWINDOW);
 }
@@ -1307,13 +1471,17 @@ static void ShowMangaBubble(HINSTANCE hInstance, HWND parent) {
         registered = true;
     }
 
-    // Position above the robot window
+    // Position above the robot window — clamp to screen edges for readability
     RECT rc;
     GetWindowRect(parent, &rc);
+    int screenW = GetSystemMetrics(SM_CXSCREEN);
     int bubbleW = 340, bubbleH = 280;
     int x = rc.left + (rc.right - rc.left) / 2 - bubbleW / 2;
     int y = rc.top - bubbleH + 15; // tail overlaps robot slightly
     if (y < 0) y = rc.bottom + 10;
+    // Clamp X to keep entire bubble visible on screen
+    if (x < 4) x = 4;
+    if (x + bubbleW > screenW - 4) x = screenW - bubbleW - 4;
 
     g_bubbleHwnd = CreateWindowExW(
         WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
@@ -1328,6 +1496,17 @@ static void ShowMangaBubble(HINSTANCE hInstance, HWND parent) {
     ShowWindow(g_bubbleHwnd, SW_SHOWNOACTIVATE);
     UpdateWindow(g_bubbleHwnd);
     SetFocus(g_bubbleHwnd);
+
+    // Auto-scroll conversation to bottom so latest chat is visible
+    HWND hConvo = GetDlgItem(g_bubbleHwnd, IDC_BUBBLE_CONVO);
+    if (hConvo) {
+        LRESULT textLen = SendMessageW(hConvo, WM_GETTEXTLENGTH, 0, 0);
+        SendMessageW(hConvo, EM_SETSEL, textLen, textLen);
+        SendMessageW(hConvo, EM_SCROLLCARET, 0, 0);
+    }
+    // Focus the input edit box for immediate typing
+    HWND hEdit = GetDlgItem(g_bubbleHwnd, IDC_BUBBLE_EDIT);
+    if (hEdit) SetFocus(hEdit);
 }
 
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {

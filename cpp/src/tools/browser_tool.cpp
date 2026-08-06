@@ -1332,8 +1332,18 @@ bool navigate(const std::string& url) {
         return false;
     }
 #if defined(_WIN32)
-    // Try to find browser window and navigate
-    // In a real implementation, this would use CDP or UI automation
+    // Actually open the URL in the default browser
+    std::wstring wUrl(url.begin(), url.end());
+    HINSTANCE hInst = ShellExecuteW(nullptr, L"open", wUrl.c_str(),
+                                    nullptr, nullptr, SW_SHOWNORMAL);
+    if ((INT_PTR)hInst <= 32) {
+        // Fallback: try cmd /c start
+        std::wstring cmd = L"cmd /c start " + wUrl;
+        ShellExecuteW(nullptr, L"open", L"cmd.exe",
+                      (L"/c start " + wUrl).c_str(), nullptr, SW_HIDE);
+    }
+    // Give browser time to open
+    Sleep(1500);
     return true;
 #else
     return false;
@@ -1386,7 +1396,20 @@ bool stop_loading() {
 
 std::string get_current_url() {
     if (g_simulation_mode) return current_page().url;
+#if defined(_WIN32)
+    HWND fg = GetForegroundWindow();
+    if (fg) {
+        wchar_t title[512] = {};
+        GetWindowTextW(fg, title, 512);
+        if (title[0]) {
+            std::wstring wTitle(title);
+            return std::string(wTitle.begin(), wTitle.end());
+        }
+    }
+    return "[No browser window detected]";
+#else
     return "";
+#endif
 }
 
 std::string get_current_title() {
@@ -1474,7 +1497,21 @@ PageInfo get_page_info() {
 
 std::string get_page_content() {
     if (g_simulation_mode) return current_page().content_text;
+#if defined(_WIN32)
+    HWND fg = GetForegroundWindow();
+    if (fg) {
+        wchar_t title[512] = {};
+        GetWindowTextW(fg, title, 512);
+        if (title[0]) {
+            std::wstring wTitle(title);
+            return std::string(wTitle.begin(), wTitle.end()) +
+                "\n[Browser is open. Use screen_capture or screen_ocr for full page content.]";
+        }
+    }
+    return "[No browser window detected]";
+#else
     return "";
+#endif
 }
 
 std::string get_page_html() {
@@ -1484,7 +1521,20 @@ std::string get_page_html() {
 
 std::string get_page_title() {
     if (g_simulation_mode) return current_page().title;
+#if defined(_WIN32)
+    HWND fg = GetForegroundWindow();
+    if (fg) {
+        wchar_t title[512] = {};
+        GetWindowTextW(fg, title, 512);
+        if (title[0]) {
+            std::wstring wTitle(title);
+            return std::string(wTitle.begin(), wTitle.end());
+        }
+    }
+    return "[No browser window detected]";
+#else
     return "";
+#endif
 }
 
 std::string get_page_text_by_element(const std::string& element_id) {

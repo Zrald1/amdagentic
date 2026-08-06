@@ -22,9 +22,12 @@ ContentIndex index_directory(const std::string& root_path, bool include_hidden) 
     // Step 1: Scan the directory
     index.scan_result = scan_directory(root_path, include_hidden);
 
-    // Step 2: Index text files
+    // Step 2: Index text files (capped to avoid runaway indexing on huge directories)
+    const size_t MAX_FILES_TO_INDEX = 500;
+    size_t indexedCount = 0;
     for (const auto& fe : index.scan_result.files) {
         if (fe.type != FileType::TEXT) continue;
+        if (indexedCount >= MAX_FILES_TO_INDEX) break;
 
         try {
             std::string content = read_file_to_string(fe.path);
@@ -60,6 +63,7 @@ ContentIndex index_directory(const std::string& root_path, bool include_hidden) 
             }
 
             index.total_text_indexed++;
+            indexedCount++;
         } catch (const std::exception& e) {
             std::cerr << "Warning: Failed to index " << fe.path << ": " << e.what() << std::endl;
         }
@@ -68,9 +72,11 @@ ContentIndex index_directory(const std::string& root_path, bool include_hidden) 
     // Finalize TF-IDF vectors
     index.text_store.finalize();
 
-    // Step 3: Fingerprint image files
+    // Step 3: Fingerprint image files (capped to avoid runaway indexing)
+    const size_t MAX_IMAGES_TO_INDEX = 200;
     for (const auto& fe : index.scan_result.files) {
         if (fe.type != FileType::IMAGE) continue;
+        if (index.images.size() >= MAX_IMAGES_TO_INDEX) break;
 
         try {
             IndexedImage img;
@@ -93,6 +99,123 @@ ContentIndex index_directory(const std::string& root_path, bool include_hidden) 
         std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count()
     );
 
+    return index;
+}
+
+// Index a directory with granular progress reporting (0-100).
+// Used by manual RAG folder sync so the UI can show a live percentage.
+ContentIndex index_directory_with_progress(const std::string& root_path, bool include_hidden,
+                                            const std::function<void(int)>& progress_cb) {
+    auto start = std::chrono::steady_clock::now();
+
+    ContentIndex index;
+    index.total_chunks = 0;
+    index.total_images_indexed = 0;
+    index.total_text_indexed = 0;
+
+    if (progress_cb) progress_cb(0);
+
+    // Step 1: Scan the directory
+    index.scan_result = scan_directory(root_path, include_hidden);
+
+    // Count total processable files (text + image) for progress percentage
+    const size_t MAX_FILES_TO_INDEX = 2000; // higher cap for user-selected folders
+    size_t totalProcessable = 0;
+    for (const auto& fe : index.scan_result.files) {
+        if (fe.type == FileType::TEXT || fe.type == FileType::IMAGE) totalProcessable++;
+    }
+    if (totalProcessable == 0) {
+        if (progress_cb) progress_cb(100);
+        return index;
+    }
+    totalProcessable = std::min(totalProcessable, MAX_FILES_TO_INDEX);
+
+    size_t processed = 0;
+    auto reportProgress = [&]() {
+        if (!progress_cb) return;
+        int pct = static_cast<int>((processed * 100) / totalProcessable);
+        if (pct > 99) pct = 99; // reserve 100 for final completion
+        progress_cb(pct);
+    };
+
+    // Step 2: Index text files
+    size_t indexedCount = 0;
+    for (const auto& fe : index.scan_result.files) {
+        if (fe.type != FileType::TEXT) continue;
+        if (indexedCount >= MAX_FILES_TO_INDEX) break;
+
+        try {
+            std::string content = read_file_to_string(fe.path);
+
+            if (is_binary_content(content)) {
+                const_cast<FileEntry&>(fe).type = FileType::BINARY;
+                index.scan_result.total_text_files--;
+                index.scan_result.total_binary_files++;
+                processed++;
+                reportProgress();
+                continue;
+            }
+
+            const_cast<FileEntry&>(fe).language = detect_language(fe.extension, content);
+            const_cast<FileEntry&>(fe).line_count = count_lines(content);
+            const_cast<FileEntry&>(fe).encoding = detect_encoding(
+                std::vector<uint8_t>(content.begin(), content.begin() + std::min(content.size(), static_cast<size_t>(4096))));
+            const_cast<FileEntry&>(fe).imports = extract_imports(content, fe.language);
+
+            auto chunks = chunk_text(content);
+            for (const auto& chunk : chunks) {
+                index.text_store.add_chunk(
+                    fe.path, fe.relative_path, chunk.text,
+                    chunk.chunk_index, chunk.start_pos, chunk.end_pos
+                );
+                index.total_chunks++;
+            }
+
+            index.total_text_indexed++;
+            indexedCount++;
+        } catch (const std::exception& e) {
+            std::cerr << "Warning: Failed to index " << fe.path << ": " << e.what() << std::endl;
+        }
+        processed++;
+        reportProgress();
+    }
+
+    index.text_store.finalize();
+
+    // Step 3: Fingerprint image files
+    const size_t MAX_IMAGES_TO_INDEX = 500;
+    for (const auto& fe : index.scan_result.files) {
+        if (fe.type != FileType::IMAGE) continue;
+        if (index.images.size() >= MAX_IMAGES_TO_INDEX) {
+            processed++;
+            reportProgress();
+            continue;
+        }
+
+        try {
+            IndexedImage img;
+            img.file_path = fe.path;
+            img.relative_path = fe.relative_path;
+            img.size = fe.size;
+            img.fingerprint = fingerprint_image(fe.path);
+
+            int img_idx = static_cast<int>(index.images.size());
+            index.base64_to_image[img.fingerprint.base64_hash] = img_idx;
+            index.images.push_back(std::move(img));
+            index.total_images_indexed++;
+        } catch (const std::exception& e) {
+            std::cerr << "Warning: Failed to fingerprint " << fe.path << ": " << e.what() << std::endl;
+        }
+        processed++;
+        reportProgress();
+    }
+
+    auto end = std::chrono::steady_clock::now();
+    index.index_build_time_ms = static_cast<size_t>(
+        std::chrono::duration_cast<std::chrono::milliseconds>(end - start).count()
+    );
+
+    if (progress_cb) progress_cb(100);
     return index;
 }
 

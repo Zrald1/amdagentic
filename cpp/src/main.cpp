@@ -227,6 +227,36 @@ static std::wstring GatherScreenContext() {
     return context;
 }
 
+// ── Color palette (used by RefreshConversation and BubbleWndProc) ──
+// Neon blue palette (matches Argos's eye color)
+#define NEON_BLUE      RGB(0, 207, 255)
+#define NEON_BLUE_DIM  RGB(120, 220, 255)
+#define NEON_BLUE_GLOW RGB(200, 245, 255)
+#define NEON_BLUE_BAR  RGB(0, 180, 235)
+#define TEXT_DARK      RGB(20, 20, 20)
+#define TEXT_BLACK     RGB(0, 0, 0)
+#define TEXT_NEON      RGB(0, 160, 220)
+
+// Modern dark theme colors
+#define DARK_BG        RGB(24, 24, 28)
+#define DARK_BG_HEADER RGB(32, 32, 38)
+#define DARK_CONV_BG   RGB(28, 28, 34)
+#define DARK_INPUT_BG  RGB(38, 38, 44)
+#define DARK_BTN_BG    RGB(44, 44, 52)
+#define DARK_BTN_HOVER RGB(58, 58, 68)
+#define DARK_SEND_BG   RGB(0, 120, 215)
+#define DARK_EXIT_BG   RGB(80, 30, 30)
+#define TEXT_LIGHT     RGB(230, 230, 235)
+#define TEXT_DIM       RGB(140, 140, 150)
+#define BUBBLE_USER    RGB(0, 120, 215)
+#define BUBBLE_ARGOS   RGB(45, 45, 52)
+#define TEXT_USER      RGB(255, 255, 255)
+#define TEXT_ARGOS     RGB(225, 225, 230)
+#define DRAG_HANDLE    RGB(60, 60, 70)
+
+// Forward declaration
+static std::wstring StripThinkTags(const std::wstring& text);
+
 // Chat history entry: user message + assistant response
 struct ChatEntry {
     std::wstring userMsg;
@@ -283,49 +313,49 @@ static void RefreshConversation(HWND hwnd) {
     cfUser.cbSize = sizeof(cfUser);
     cfUser.dwMask = CFM_COLOR | CFM_BACKCOLOR | CFM_BOLD;
     cfUser.dwEffects = CFE_BOLD;
-    cfUser.crTextColor = RGB(255, 255, 255);       // white text
-    cfUser.crBackColor = RGB(0, 120, 215);          // blue bubble
+    cfUser.crTextColor = TEXT_USER;                // white text
+    cfUser.crBackColor = BUBBLE_USER;              // blue bubble
     cfUser.bPitchAndFamily = DEFAULT_PITCH | FF_SWISS;
 
-    // ── User sender label format: small, white, right-aligned ──
+    // ── User sender label format: small, light blue, right-aligned ──
     CHARFORMAT2W cfUserLabel = {};
     cfUserLabel.cbSize = sizeof(cfUserLabel);
     cfUserLabel.dwMask = CFM_COLOR | CFM_BACKCOLOR | CFM_SIZE | CFM_BOLD;
     cfUserLabel.dwEffects = CFE_BOLD;
-    cfUserLabel.crTextColor = RGB(220, 235, 250);
-    cfUserLabel.crBackColor = RGB(0, 120, 215);
+    cfUserLabel.crTextColor = RGB(180, 210, 240);
+    cfUserLabel.crBackColor = BUBBLE_USER;
     cfUser.yHeight = 180; // 9pt
 
-    // ── Argos message bubble format: light gray bg, black text, left-aligned ──
+    // ── Argos message bubble format: dark gray bg, light text, left-aligned ──
     CHARFORMAT2W cfArgos = {};
     cfArgos.cbSize = sizeof(cfArgos);
     cfArgos.dwMask = CFM_COLOR | CFM_BACKCOLOR;
-    cfArgos.crTextColor = RGB(30, 30, 30);           // near-black text
-    cfArgos.crBackColor = RGB(240, 240, 240);        // light gray bubble
+    cfArgos.crTextColor = TEXT_ARGOS;              // light text
+    cfArgos.crBackColor = BUBBLE_ARGOS;            // dark gray bubble
 
-    // ── Argos sender label format: blue bold ──
+    // ── Argos sender label format: neon blue bold ──
     CHARFORMAT2W cfArgosLabel = {};
     cfArgosLabel.cbSize = sizeof(cfArgosLabel);
     cfArgosLabel.dwMask = CFM_COLOR | CFM_BACKCOLOR | CFM_BOLD;
     cfArgosLabel.dwEffects = CFE_BOLD;
-    cfArgosLabel.crTextColor = RGB(0, 120, 215);     // blue
-    cfArgosLabel.crBackColor = RGB(240, 240, 240);   // light gray
-    cfArgosLabel.yHeight = 200; // 10pt — ensure label size is set explicitly
+    cfArgosLabel.crTextColor = NEON_BLUE;          // neon blue
+    cfArgosLabel.crBackColor = BUBBLE_ARGOS;       // dark gray
+    cfArgosLabel.yHeight = 200; // 10pt
 
-    // ── Thinking format: gray italic ──
+    // ── Thinking format: dim italic ──
     CHARFORMAT2W cfThink = {};
     cfThink.cbSize = sizeof(cfThink);
     cfThink.dwMask = CFM_COLOR | CFM_BACKCOLOR | CFM_ITALIC;
     cfThink.dwEffects = CFE_ITALIC;
-    cfThink.crTextColor = RGB(130, 130, 130);
-    cfThink.crBackColor = RGB(240, 240, 240);
+    cfThink.crTextColor = TEXT_DIM;
+    cfThink.crBackColor = BUBBLE_ARGOS;
 
     // ── Spacing format (blank line between messages) ──
     CHARFORMAT2W cfSpacer = {};
     cfSpacer.cbSize = sizeof(cfSpacer);
     cfSpacer.dwMask = CFM_COLOR | CFM_BACKCOLOR;
-    cfSpacer.crTextColor = RGB(255, 255, 255);
-    cfSpacer.crBackColor = RGB(255, 255, 255);
+    cfSpacer.crTextColor = DARK_CONV_BG;
+    cfSpacer.crBackColor = DARK_CONV_BG;
 
     for (const auto& entry : g_chatHistory) {
         // ── User message bubble (right-aligned, blue) ──
@@ -423,23 +453,23 @@ static void UpdateThinkingDots(HWND hwnd) {
     pf.dySpaceAfter = 0;
     SendMessageW(hConvo, EM_SETPARAFORMAT, 0, (LPARAM)&pf);
 
-    // "Argos" label: blue bold on gray
+    // "Argos" label: neon blue bold on dark gray
     CHARFORMAT2W cfLabel = {};
     cfLabel.cbSize = sizeof(cfLabel);
     cfLabel.dwMask = CFM_COLOR | CFM_BACKCOLOR | CFM_BOLD;
     cfLabel.dwEffects = CFE_BOLD;
-    cfLabel.crTextColor = RGB(0, 120, 215);
-    cfLabel.crBackColor = RGB(240, 240, 240);
+    cfLabel.crTextColor = NEON_BLUE;
+    cfLabel.crBackColor = BUBBLE_ARGOS;
     SendMessageW(hConvo, EM_SETCHARFORMAT, SCF_SELECTION, (LPARAM)&cfLabel);
     SendMessageW(hConvo, EM_REPLACESEL, FALSE, (LPARAM)L"Argos\r\n");
 
-    // Thinking text: gray italic on gray
+    // Thinking text: dim italic on dark gray
     CHARFORMAT2W cfThink = {};
     cfThink.cbSize = sizeof(cfThink);
     cfThink.dwMask = CFM_COLOR | CFM_BACKCOLOR | CFM_ITALIC;
     cfThink.dwEffects = CFE_ITALIC;
-    cfThink.crTextColor = RGB(130, 130, 130);
-    cfThink.crBackColor = RGB(240, 240, 240);
+    cfThink.crTextColor = TEXT_DIM;
+    cfThink.crBackColor = BUBBLE_ARGOS;
     SendMessageW(hConvo, EM_SETCHARFORMAT, SCF_SELECTION, (LPARAM)&cfThink);
 
     const wchar_t* dots[] = { L".  .  .", L"*  .  .", L".  *  .", L".  .  *" };
@@ -505,15 +535,6 @@ static bool g_ragSyncDone = true;
 // Color-key transparency (magenta = transparent) makes only the bubble
 // visible — no window frame, just the bubble shape.
 
-// Neon blue palette (matches EVE's eye color)
-#define NEON_BLUE      RGB(0, 207, 255)
-#define NEON_BLUE_DIM  RGB(120, 220, 255)
-#define NEON_BLUE_GLOW RGB(200, 245, 255)
-#define NEON_BLUE_BAR  RGB(0, 180, 235)
-#define TEXT_DARK      RGB(20, 20, 20)
-#define TEXT_BLACK     RGB(0, 0, 0)
-#define TEXT_NEON      RGB(0, 160, 220)
-
 static HWND g_bubbleHwnd = nullptr;
 static HFONT g_bubbleFont = nullptr;
 static HFONT g_bubbleTitleFont = nullptr;
@@ -532,12 +553,12 @@ struct NeonButton {
 };
 
 static NeonButton g_btnData[] = {
-    { L"Send",     RGB(255,255,255), NEON_BLUE,      NEON_BLUE_BAR  },
-    { L"Voice",    TEXT_DARK,        NEON_BLUE_DIM,  RGB(235,250,255) },
-    { L"Set",      TEXT_DARK,        NEON_BLUE_DIM,  RGB(235,250,255) },
-    { L"History",  TEXT_DARK,        NEON_BLUE_DIM,  RGB(235,250,255) },
-    { L"Expand",   TEXT_DARK,        NEON_BLUE_DIM,  RGB(235,250,255) },
-    { L"Exit",     TEXT_DARK,        RGB(180,180,180), RGB(245,245,245) },
+    { L"Send",     RGB(255,255,255), NEON_BLUE,      DARK_SEND_BG   },
+    { L"Voice",    TEXT_LIGHT,       NEON_BLUE_DIM,  DARK_BTN_BG    },
+    { L"Set",      TEXT_LIGHT,       NEON_BLUE_DIM,  DARK_BTN_BG    },
+    { L"History",  TEXT_LIGHT,       NEON_BLUE_DIM,  DARK_BTN_BG    },
+    { L"Expand",   TEXT_LIGHT,       NEON_BLUE_DIM,  DARK_BTN_BG    },
+    { L"Exit",     RGB(255,180,180), RGB(120,60,60), DARK_EXIT_BG   },
 };
 
 static LRESULT CALLBACK BubbleWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam);
@@ -576,8 +597,8 @@ static LRESULT CALLBACK BubbleWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             g_bubbleSmallFont = CreateFontW(13, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
                 DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
                 CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI Semibold");
-            g_bubbleBgBrush = CreateSolidBrush(RGB(255, 255, 255));
-            g_bubbleEditBgBrush = CreateSolidBrush(RGB(250, 253, 255));
+            g_bubbleBgBrush = CreateSolidBrush(DARK_BG);
+            g_bubbleEditBgBrush = CreateSolidBrush(DARK_INPUT_BG);
 
             // Title label — neon blue text
             HWND hTitle = CreateWindowExW(0, L"STATIC", L"Ask Argos",
@@ -592,16 +613,16 @@ static LRESULT CALLBACK BubbleWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
                 WS_CHILD | WS_VISIBLE | ES_MULTILINE | ES_READONLY | WS_VSCROLL | ES_AUTOVSCROLL,
                 28, 38, 284, 120, hwnd, (HMENU)IDC_BUBBLE_CONVO, nullptr, nullptr);
             SendMessageW(hConvo, WM_SETFONT, (WPARAM)g_bubbleFont, TRUE);
-            // White background
-            SendMessageW(hConvo, EM_SETBKGNDCOLOR, 0, (LPARAM)RGB(255, 255, 255));
+            // Dark background for conversation area
+            SendMessageW(hConvo, EM_SETBKGNDCOLOR, 0, (LPARAM)DARK_CONV_BG);
             // Disable auto-url detection to prevent blue links cluttering
             SendMessageW(hConvo, EM_AUTOURLDETECT, FALSE, 0);
-            // Set default format: black text on white
+            // Set default format: light text on dark
             CHARFORMAT2W cf = {};
             cf.cbSize = sizeof(cf);
             cf.dwMask = CFM_COLOR | CFM_BACKCOLOR;
-            cf.crTextColor = RGB(0, 0, 0);
-            cf.crBackColor = RGB(255, 255, 255);
+            cf.crTextColor = TEXT_LIGHT;
+            cf.crBackColor = DARK_CONV_BG;
             SendMessageW(hConvo, EM_SETCHARFORMAT, SCF_DEFAULT, (LPARAM)&cf);
             // Set event mask to include EN_CHANGE so we can track scrolling
             SendMessageW(hConvo, EM_SETEVENTMASK, 0, ENM_SCROLL | ENM_CHANGE);
@@ -723,6 +744,19 @@ static LRESULT CALLBACK BubbleWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
         }
         case WM_ERASEBKGND:
             return 1;
+        case WM_NCHITTEST: {
+            // Allow dragging the window by clicking on the title/header area
+            POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+            RECT rc;
+            GetWindowRect(hwnd, &rc);
+            int relX = pt.x - rc.left;
+            int relY = pt.y - rc.top;
+            // Title bar drag area: top 40px of the bubble (inside the rounded border)
+            if (relY >= 10 && relY <= 40 && relX >= 10 && relX <= rc.right - rc.left - 10) {
+                return HTCAPTION;
+            }
+            return HTCLIENT;
+        }
         case WM_PAINT: {
             PAINTSTRUCT ps;
             HDC hdc = BeginPaint(hwnd, &ps);
@@ -747,22 +781,20 @@ static LRESULT CALLBACK BubbleWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             int tailW = 16, tailH = 28;
 
             HPEN nullPen = (HPEN)GetStockObject(NULL_PEN);
-            HBRUSH whiteBrush = CreateSolidBrush(RGB(255, 255, 255));
+            HBRUSH darkBrush = CreateSolidBrush(DARK_BG);
             HBRUSH glowBrush = CreateSolidBrush(NEON_BLUE_GLOW);
             HBRUSH dimGlowBrush = CreateSolidBrush(NEON_BLUE_DIM);
 
-            // ── 1. Glow halo: concentric rounded rects, progressively brighter ──
-            // Outer glow (widest, lightest)
+            // ── 1. Glow halo: concentric rounded rects ──
             SelectObject(memDC, nullPen);
             SelectObject(memDC, glowBrush);
             RoundRect(memDC, bL - 6, bT - 6, bR + 6, bB + 6, (radius + 6) * 2, (radius + 6) * 2);
-            // Mid glow
             SelectObject(memDC, dimGlowBrush);
             RoundRect(memDC, bL - 3, bT - 3, bR + 3, bB + 3, (radius + 3) * 2, (radius + 3) * 2);
 
-            // ── 2. Tail fill (white, behind bubble) ──
+            // ── 2. Tail fill (dark, behind bubble) ──
             SelectObject(memDC, nullPen);
-            SelectObject(memDC, whiteBrush);
+            SelectObject(memDC, darkBrush);
             POINT tail[] = {
                 {tailX - tailW, bB - 2},
                 {tailX + tailW, bB - 2},
@@ -770,39 +802,49 @@ static LRESULT CALLBACK BubbleWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             };
             Polygon(memDC, tail, 3);
 
-            // ── 3. White bubble body ──
+            // ── 3. Dark bubble body ──
             RoundRect(memDC, bL, bT, bR, bB, radius * 2, radius * 2);
 
-            // ── 4. Neon blue accent header bar (top inside bubble) ──
+            // ── 4. Neon accent header bar (top inside bubble) ──
             HBRUSH barBrush = CreateSolidBrush(NEON_BLUE_BAR);
-            // Draw a thin neon bar across the top of the bubble interior
-            RECT barRect = {bL + 2, bT + 2, bR - 2, bT + 5};
-            // Use a rounded clip by filling a thin rounded rect
             SelectObject(memDC, nullPen);
             SelectObject(memDC, barBrush);
             RoundRect(memDC, bL + 1, bT + 1, bR - 1, bT + 8, radius * 2, radius * 2);
             DeleteObject(barBrush);
 
-            // ── 5. Neon blue outline (2.5px) ──
+            // ── 5. Drag handle indicator (three dots in header area) ──
+            HBRUSH handleBrush = CreateSolidBrush(DRAG_HANDLE);
+            SelectObject(memDC, nullPen);
+            SelectObject(memDC, handleBrush);
+            int handleY = bT + 4;
+            int handleSpacing = 6;
+            int handleStartX = w / 2 - handleSpacing;
+            for (int i = 0; i < 3; i++) {
+                Ellipse(memDC, handleStartX + i * handleSpacing - 1, handleY - 1,
+                        handleStartX + i * handleSpacing + 2, handleY + 2);
+            }
+            DeleteObject(handleBrush);
+
+            // ── 6. Neon blue outline (2px) ──
             HPEN neonPen = CreatePen(PS_SOLID, 2, NEON_BLUE);
             SelectObject(memDC, neonPen);
             SelectObject(memDC, GetStockObject(NULL_BRUSH));
             RoundRect(memDC, bL, bT, bR, bB, radius * 2, radius * 2);
 
-            // ── 6. Erase bottom outline where tail connects ──
+            // ── 7. Erase bottom outline where tail connects ──
             SelectObject(memDC, nullPen);
-            SelectObject(memDC, whiteBrush);
+            SelectObject(memDC, darkBrush);
             RECT eraseRect = {tailX - tailW, bB - 2, tailX + tailW, bB + 2};
-            FillRect(memDC, &eraseRect, whiteBrush);
+            FillRect(memDC, &eraseRect, darkBrush);
 
-            // ── 7. Tail outline (neon blue, two sides) ──
+            // ── 8. Tail outline ──
             SelectObject(memDC, neonPen);
             SelectObject(memDC, GetStockObject(NULL_BRUSH));
             MoveToEx(memDC, tailX - tailW, bB, nullptr);
             LineTo(memDC, tailX, bB + tailH);
             LineTo(memDC, tailX + tailW, bB);
 
-            // ── 8. Tail glow (thin dim outline around tail) ──
+            // ── 9. Tail glow ──
             HPEN glowPen = CreatePen(PS_SOLID, 2, NEON_BLUE_DIM);
             SelectObject(memDC, glowPen);
             MoveToEx(memDC, tailX - tailW - 2, bB, nullptr);
@@ -812,18 +854,18 @@ static LRESULT CALLBACK BubbleWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             SelectObject(memDC, nullPen);
             DeleteObject(neonPen);
             DeleteObject(glowPen);
-            DeleteObject(whiteBrush);
+            DeleteObject(darkBrush);
             DeleteObject(glowBrush);
             DeleteObject(dimGlowBrush);
 
-            // ── 9. Modern thin borders around edit controls ──
-            HPEN thinPen = CreatePen(PS_SOLID, 1, NEON_BLUE_DIM);
+            // ── 10. Modern thin borders around edit controls (subtle dark) ──
+            HPEN thinPen = CreatePen(PS_SOLID, 1, RGB(55, 55, 65));
             SelectObject(memDC, thinPen);
             SelectObject(memDC, GetStockObject(NULL_BRUSH));
             // Conversation area border (rounded)
-            RoundRect(memDC, 26, 36, 314, 160, 8, 8);
+            RoundRect(memDC, 26, 36, w - 26, h - 78, 8, 8);
             // Input box border (rounded)
-            RoundRect(memDC, 26, 164, 314, 200, 8, 8);
+            RoundRect(memDC, 26, h - 74, w - 26, h - 40, 8, 8);
             DeleteObject(thinPen);
 
             BitBlt(hdc, 0, 0, w, h, memDC, 0, 0, SRCCOPY);
@@ -852,12 +894,12 @@ static LRESULT CALLBACK BubbleWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             HDC hdc = dis->hDC;
             RECT rc = dis->rcItem;
 
-            // Modern rounded background
+            // Modern rounded background (pill-shaped)
             HBRUSH bgBrush = CreateSolidBrush(btn->bgColor);
             HPEN nullPen2 = (HPEN)GetStockObject(NULL_PEN);
             SelectObject(hdc, nullPen2);
             SelectObject(hdc, bgBrush);
-            RoundRect(hdc, rc.left, rc.top, rc.right - 1, rc.bottom - 1, 10, 10);
+            RoundRect(hdc, rc.left, rc.top, rc.right - 1, rc.bottom - 1, 12, 12);
             DeleteObject(bgBrush);
 
             // Border (neon blue, thicker on press)
@@ -865,7 +907,7 @@ static LRESULT CALLBACK BubbleWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             HPEN borderPen = CreatePen(PS_SOLID, borderWidth, btn->borderColor);
             SelectObject(hdc, borderPen);
             SelectObject(hdc, GetStockObject(NULL_BRUSH));
-            RoundRect(hdc, rc.left, rc.top, rc.right - 1, rc.bottom - 1, 10, 10);
+            RoundRect(hdc, rc.left, rc.top, rc.right - 1, rc.bottom - 1, 12, 12);
             DeleteObject(borderPen);
 
             // Text
@@ -881,18 +923,18 @@ static LRESULT CALLBACK BubbleWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
         }
         case WM_CTLCOLORSTATIC: {
             HDC hdcCtl = (HDC)wParam;
-            // For STATIC labels (title), use transparent with neon text
+            // For STATIC labels (title), use transparent with neon text on dark
             SetBkMode(hdcCtl, TRANSPARENT);
-            SetTextColor(hdcCtl, TEXT_NEON);
+            SetTextColor(hdcCtl, TEXT_LIGHT);
             return (LRESULT)g_bubbleBgBrush;
         }
         case WM_CTLCOLOREDIT: {
             HDC hdcCtl = (HDC)wParam;
-            // White background for input edit, pure black text
-            SetBkColor(hdcCtl, RGB(255, 255, 255));
-            SetTextColor(hdcCtl, TEXT_BLACK);
-            static HBRUSH whiteEditBrush = CreateSolidBrush(RGB(255, 255, 255));
-            return (LRESULT)whiteEditBrush;
+            // Dark background for input edit, light text
+            SetBkColor(hdcCtl, DARK_INPUT_BG);
+            SetTextColor(hdcCtl, TEXT_LIGHT);
+            static HBRUSH darkEditBrush = CreateSolidBrush(DARK_INPUT_BG);
+            return (LRESULT)darkEditBrush;
         }
         case WM_COMMAND: {
             switch (LOWORD(wParam)) {
@@ -1087,21 +1129,12 @@ static LRESULT CALLBACK BubbleWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
                 case IDC_BUBBLE_EXPAND: {
                     g_expanded = !g_expanded;
                     if (g_expanded) {
-                        // Expand anchored to robot position — not centered on screen
-                        RECT rcRobot;
-                        HWND hRobot = GetParent(hwnd);
-                        if (hRobot) GetWindowRect(hRobot, &rcRobot);
-                        else { rcRobot.left = 100; rcRobot.right = 200; rcRobot.top = 200; rcRobot.bottom = 300; }
+                        // Center expanded window on screen for best readability
                         int screenW = GetSystemMetrics(SM_CXSCREEN);
                         int screenH = GetSystemMetrics(SM_CYSCREEN);
                         int newW = 580, newH = 500;
-                        int newX = rcRobot.left + (rcRobot.right - rcRobot.left) / 2 - newW / 2;
-                        int newY = rcRobot.top - newH + 15;
-                        if (newY < 0) newY = rcRobot.bottom + 10;
-                        // Clamp X to screen edges
-                        if (newX < 4) newX = 4;
-                        if (newX + newW > screenW - 4) newX = screenW - newW - 4;
-                        if (newY + newH > screenH - 4) newY = screenH - newH - 4;
+                        int newX = (screenW - newW) / 2;
+                        int newY = (screenH - newH) / 2;
                         SetWindowPos(hwnd, HWND_TOPMOST, newX, newY, newW, newH, SWP_SHOWWINDOW);
                         g_btnData[4].label = L"Shrink";
                     } else {
@@ -1188,6 +1221,8 @@ static LRESULT CALLBACK BubbleWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
                 std::lock_guard<std::mutex> lock(g_streamingMutex);
                 streamedTextCopy = g_streamingPartial;
             }
+            // Strip  tags from streaming text — only show direct response
+            streamedTextCopy = StripThinkTags(streamedTextCopy);
             // Update the last history entry with streaming partial response
             if (!g_chatHistory.empty()) {
                 g_chatHistory.back().assistantMsg = streamedTextCopy;
@@ -1206,7 +1241,7 @@ static LRESULT CALLBACK BubbleWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             g_chatInProgress.store(false);
             EnableWindow(GetDlgItem(hwnd, IDC_BUBBLE_SEND), TRUE);
 
-            std::wstring response = g_pendingResponse;
+            std::wstring response = StripThinkTags(g_pendingResponse);
 
             // Update the last history entry with the AI response
             if (!g_chatHistory.empty()) {
@@ -1456,20 +1491,49 @@ static LRESULT CALLBACK ProactiveBubbleProc(HWND hwnd, UINT msg, WPARAM wParam, 
     return DefWindowProcW(hwnd, msg, wParam, lParam);
 }
 
+// Strip <think>...</think> tags from AI responses (DeepSeek models output these)
+static std::wstring StripThinkTags(const std::wstring& text) {
+    std::wstring result = text;
+    size_t pos = 0;
+    while ((pos = result.find(L"<think>", pos)) != std::wstring::npos) {
+        size_t end = result.find(L"</think>", pos);
+        if (end == std::wstring::npos) {
+            // No closing tag — remove from <think> to end
+            result.erase(pos);
+            break;
+        }
+        result.erase(pos, end + 8 - pos);
+    }
+    // Also strip standalone </think> if any remain
+    pos = 0;
+    while ((pos = result.find(L"</think>", pos)) != std::wstring::npos) {
+        result.erase(pos, 8);
+    }
+    // Trim leading whitespace/newlines left behind
+    while (!result.empty() && (result[0] == L'\n' || result[0] == L'\r' || result[0] == L' ' || result[0] == L'\t')) {
+        result.erase(0, 1);
+    }
+    return result;
+}
+
 static void ShowProactiveBubble(HWND robotHwnd, const std::wstring& message) {
+    // Strip <think> tags — proactive bubble should only show direct thoughts
+    std::wstring cleanMsg = StripThinkTags(message);
+    if (cleanMsg.empty()) return;
+
     if (g_proactiveBubble) {
         // Update existing bubble
-        g_proactiveMsg = message;
+        g_proactiveMsg = cleanMsg;
         InvalidateRect(g_proactiveBubble, nullptr, TRUE);
         // Recalculate dismiss time based on new message word count
         int wordCount = 1;
-        for (wchar_t c : message) if (c == L' ' || c == L'\n') wordCount++;
+        for (wchar_t c : cleanMsg) if (c == L' ' || c == L'\n') wordCount++;
         int dismissMs = (std::max)(6, wordCount * 2) * 1000;
         SetTimer(g_proactiveBubble, IDT_PROACTIVE_BUBBLE_TIMEOUT, dismissMs, nullptr);
         return;
     }
 
-    g_proactiveMsg = message;
+    g_proactiveMsg = cleanMsg;
 
     static bool registered = false;
     if (!registered) {

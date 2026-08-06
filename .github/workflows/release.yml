@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Release tag (e.g. v0.1.0)'
+        description: 'Release tag (e.g. v1.0.0)'
         required: true
-        default: 'v0.1.0'
+        default: 'v1.0.0'
 
 permissions:
   contents: write
@@ -22,67 +22,59 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          channel: stable
-          cache: true
+      - name: Set up MSBuild
+        uses: microsoft/setup-msbuild@v2
 
-      - name: Enable Windows desktop
-        run: flutter config --enable-windows-desktop
-
-      - name: Get dependencies
-        run: flutter pub get
-
-      - name: Build Windows (release)
-        run: flutter build windows --release
+      - name: Build Argos (Release)
+        shell: cmd
+        working-directory: cpp
+        run: build.bat release
 
       - name: Zip Windows build
         shell: pwsh
         run: |
-          Compress-Archive -Path build/windows/x64/runner/Release/* -DestinationPath aria-windows-x64.zip -Force
+          Compress-Archive -Path cpp/build/Release/argos.exe -DestinationPath argos-windows-x64.zip -Force
 
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
-          name: aria-windows-x64
-          path: aria-windows-x64.zip
+          name: argos-windows-x64
+          path: argos-windows-x64.zip
           retention-days: 90
 
   build-android:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Java
+      - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Flutter
-        uses: subosito/flutter-action@v2
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
         with:
-          channel: stable
-          cache: true
+          packages: 'cmake;3.22.1 ndk;26.3.11579264'
 
-      - name: Get dependencies
-        run: flutter pub get
-
-      - name: Build APK (release)
-        run: flutter build apk --release
+      - name: Build Android APK (Release)
+        working-directory: android
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleRelease --no-daemon
 
       - name: Rename APK
         run: |
-          cp build/app/outputs/flutter-apk/app-release.apk aria-android-release.apk
+          cp android/app/build/outputs/apk/release/app-release.apk argos-android-release.apk
 
       - name: Upload Android artifact
         uses: actions/upload-artifact@v4
         with:
-          name: aria-android-release-apk
-          path: aria-android-release.apk
+          name: argos-android-release-apk
+          path: argos-android-release.apk
           retention-days: 90
 
   release:
@@ -106,38 +98,43 @@ jobs:
       - name: Download Windows artifact
         uses: actions/download-artifact@v4
         with:
-          name: aria-windows-x64
+          name: argos-windows-x64
           path: artifacts
 
       - name: Download Android artifact
         uses: actions/download-artifact@v4
         with:
-          name: aria-android-release-apk
+          name: argos-android-release-apk
           path: artifacts
 
       - name: List artifacts
         run: ls -la artifacts/
 
-      - name: Create or update GitHub Release
+      - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.tag.outputs.tag }}
-          name: Aria ${{ steps.tag.outputs.tag }}
+          name: Argos ${{ steps.tag.outputs.tag }}
           body: |
-            # Aria ${{ steps.tag.outputs.tag }}
+            # Argos ${{ steps.tag.outputs.tag }}
 
             ## Downloads
-            - **Windows**: `aria-windows-x64.zip` — unzip and run `aria_companion.exe`
-            - **Android**: `aria-android-release.apk` — sideload on your phone
+            - **Windows**: `argos-windows-x64.zip` — unzip and run `argos.exe`
+            - **Android**: `argos-android-release.apk` — sideload on your phone (enable "Install from unknown sources")
 
-            ## GPU Server
-            Point the app at your AMD Radeon GPU server running llama-server:
-            ```
-            llama-server -m qwen2.5-7b-instruct-q4_k_m.gguf -ngl 99 --host 0.0.0.0 --port 8080
-            ```
+            ## Features
+            - Native C++ AI desktop companion with golden Spartan helmet and red eyes
+            - Streaming chat with tool execution (list files, run commands, screen context)
+            - SQLite/JSONL persistent memory across sessions
+            - RAG file search (on-demand, not auto-triggered)
+            - Proactive speech bubbles when idle
+            - Cancel & re-chat support
+
+            ## AI Server
+            Point Argos at any OpenAI-compatible API server.
           files: |
-            artifacts/aria-windows-x64.zip
-            artifacts/aria-android-release.apk
+            artifacts/argos-windows-x64.zip
+            artifacts/argos-android-release.apk
           draft: false
           prerelease: false
           generate_release_notes: true

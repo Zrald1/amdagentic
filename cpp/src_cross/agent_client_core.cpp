@@ -6,6 +6,108 @@
 #include <thread>
 #include <chrono>
 
+// Find the closing quote of a JSON string value, skipping \" escaped quotes
+static size_t findEndQuote(const std::string& s, size_t start) {
+    size_t pos = start;
+    while (pos < s.size()) {
+        if (s[pos] == '\\') {
+            pos += 2; // skip escaped char
+            continue;
+        }
+        if (s[pos] == '"') return pos;
+        pos++;
+    }
+    return std::string::npos;
+}
+
+// Extract "content" value from a JSON string, handling optional spaces and escaped quotes
+// Also handles array format: "content":[{"type":"text","text":"..."}]
+static std::string extractContent(const std::string& json) {
+    // Try "content":"..." or "content": "..."
+    size_t keyPos = json.find("\"content\"");
+    while (keyPos != std::string::npos) {
+        size_t colonPos = json.find(':', keyPos);
+        if (colonPos == std::string::npos) break;
+        
+        // Skip whitespace after colon
+        size_t valueStart = colonPos + 1;
+        while (valueStart < json.size() && (json[valueStart] == ' ' || json[valueStart] == '\t')) {
+            valueStart++;
+        }
+        
+        if (valueStart >= json.size()) break;
+        
+        if (json[valueStart] == '"') {
+            // String value: "content":"..."
+            size_t contentStart = valueStart + 1;
+            size_t endQuote = findEndQuote(json, contentStart);
+            if (endQuote != std::string::npos) {
+                std::string content = json.substr(contentStart, endQuote - contentStart);
+                // Unescape
+                std::string unescaped;
+                for (size_t i = 0; i < content.size(); i++) {
+                    if (content[i] == '\\' && i + 1 < content.size()) {
+                        char next = content[i + 1];
+                        if (next == 'n') unescaped += '\n';
+                        else if (next == 'r') unescaped += '\r';
+                        else if (next == 't') unescaped += '\t';
+                        else if (next == '"') unescaped += '"';
+                        else if (next == '\\') unescaped += '\\';
+                        else if (next == '/') unescaped += '/';
+                        else unescaped += content[i];
+                        i++;
+                    } else {
+                        unescaped += content[i];
+                    }
+                }
+                return unescaped;
+            }
+        } else if (json[valueStart] == '[') {
+            // Array format: "content":[{"type":"text","text":"..."}]
+            // Extract text from first object
+            size_t textKey = json.find("\"text\"", valueStart);
+            if (textKey != std::string::npos) {
+                size_t textColon = json.find(':', textKey);
+                if (textColon != std::string::npos) {
+                    size_t textStart = textColon + 1;
+                    while (textStart < json.size() && (json[textStart] == ' ' || json[textStart] == '\t')) {
+                        textStart++;
+                    }
+                    if (textStart < json.size() && json[textStart] == '"') {
+                        size_t contentStart = textStart + 1;
+                        size_t endQuote = findEndQuote(json, contentStart);
+                        if (endQuote != std::string::npos) {
+                            std::string content = json.substr(contentStart, endQuote - contentStart);
+                            // Unescape
+                            std::string unescaped;
+                            for (size_t i = 0; i < content.size(); i++) {
+                                if (content[i] == '\\' && i + 1 < content.size()) {
+                                    char next = content[i + 1];
+                                    if (next == 'n') unescaped += '\n';
+                                    else if (next == 'r') unescaped += '\r';
+                                    else if (next == 't') unescaped += '\t';
+                                    else if (next == '"') unescaped += '"';
+                                    else if (next == '\\') unescaped += '\\';
+                                    else if (next == '/') unescaped += '/';
+                                    else unescaped += content[i];
+                                    i++;
+                                } else {
+                                    unescaped += content[i];
+                                }
+                            }
+                            return unescaped;
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Look for next occurrence of "content"
+        keyPos = json.find("\"content\"", keyPos + 9);
+    }
+    return "";
+}
+
 // Minimal JSON string escaper
 static std::string jsonEscape(const std::string& s) {
     std::string out;
@@ -77,36 +179,22 @@ std::string AgentClientCore::parseSSEChunk(const std::string& chunk) {
         size_t lineEnd = chunk.find('\n', pos);
         if (lineEnd == std::string::npos) lineEnd = chunk.size();
         std::string line = chunk.substr(pos, lineEnd - pos);
+        // Trim \r for \r\n line endings
+        if (!line.empty() && line.back() == '\r') line.pop_back();
         pos = lineEnd + 1;
 
-        if (line.substr(0, 6) == "data: ") {
-            std::string data = line.substr(6);
+        // Handle "data:" or "data: " (with optional space)
+        if (line.substr(0, 5) == "data:") {
+            size_t dataStart = 5;
+            if (dataStart < line.size() && line[dataStart] == ' ') dataStart++;
+            std::string data = line.substr(dataStart);
+            
             if (data == "[DONE]") break;
-            // Find "content":"..."
-            size_t contentPos = data.find("\"content\":\"");
-            if (contentPos != std::string::npos) {
-                contentPos += 11;
-                size_t endQuote = data.find("\"", contentPos);
-                if (endQuote != std::string::npos) {
-                    std::string content = data.substr(contentPos, endQuote - contentPos);
-                    // Unescape
-                    std::string unescaped;
-                    for (size_t i = 0; i < content.size(); i++) {
-                        if (content[i] == '\\' && i + 1 < content.size()) {
-                            char next = content[i + 1];
-                            if (next == 'n') unescaped += '\n';
-                            else if (next == 'r') unescaped += '\r';
-                            else if (next == 't') unescaped += '\t';
-                            else if (next == '"') unescaped += '"';
-                            else if (next == '\\') unescaped += '\\';
-                            else unescaped += content[i];
-                            i++;
-                        } else {
-                            unescaped += content[i];
-                        }
-                    }
-                    result += unescaped;
-                }
+            if (data.empty()) continue;
+            
+            std::string content = extractContent(data);
+            if (!content.empty()) {
+                result += content;
             }
         }
     }
@@ -167,31 +255,12 @@ std::string AgentClientCore::chatWithMessages(const std::vector<ChatMessageCore>
         argos::log(("Response: " + preview).c_str());
     }
 
-    // Parse JSON response — find "content":"..."
-    size_t contentPos = response.find("\"content\":\"");
-    if (contentPos != std::string::npos) {
-        contentPos += 11;
-        size_t endQuote = response.find("\"", contentPos);
-        if (endQuote != std::string::npos) {
-            std::string content = response.substr(contentPos, endQuote - contentPos);
-            // Unescape
-            std::string unescaped;
-            for (size_t i = 0; i < content.size(); i++) {
-                if (content[i] == '\\' && i + 1 < content.size()) {
-                    char next = content[i + 1];
-                    if (next == 'n') unescaped += '\n';
-                    else if (next == 't') unescaped += '\t';
-                    else if (next == '"') unescaped += '"';
-                    else if (next == '\\') unescaped += '\\';
-                    else unescaped += content[i];
-                    i++;
-                } else {
-                    unescaped += content[i];
-                }
-            }
-            return unescaped;
-        }
+    std::string content = extractContent(response);
+    if (!content.empty()) {
+        return content;
     }
+    
+    argos::log(("Failed to parse response, full response: " + response.substr(0, response.size() > 1000 ? 1000 : response.size())).c_str());
     return "[Error: Failed to parse response]";
 }
 

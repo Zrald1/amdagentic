@@ -633,6 +633,98 @@ static void UpdateThinkingDots(HWND hwnd) {
     }
 }
 
+// ── Config file loading/saving ──
+// Reads from: argos_config.txt next to exe, or %APPDATA%/Argos/argos_config.txt
+// Environment variables override: ARGOS_API_KEY, ARGOS_SERVER_URL, ARGOS_MODEL
+static std::wstring GetConfigPath() {
+    // Try next to exe first
+    wchar_t exePath[MAX_PATH] = {0};
+    GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+    std::wstring exeDir(exePath);
+    size_t lastSlash = exeDir.find_last_of(L'\\');
+    if (lastSlash != std::wstring::npos) exeDir = exeDir.substr(0, lastSlash + 1);
+    std::wstring configPath = exeDir + L"argos_config.txt";
+
+    // If not found next to exe, try %APPDATA%/Argos/
+    if (GetFileAttributesW(configPath.c_str()) == INVALID_FILE_ATTRIBUTES) {
+        wchar_t appData[MAX_PATH] = {0};
+        if (GetEnvironmentVariableW(L"APPDATA", appData, MAX_PATH)) {
+            std::wstring appDataPath = std::wstring(appData) + L"\\Argos\\argos_config.txt";
+            if (GetFileAttributesW(appDataPath.c_str()) != INVALID_FILE_ATTRIBUTES) {
+                return appDataPath;
+            }
+        }
+    }
+    return configPath; // Default: next to exe (may not exist yet)
+}
+
+struct ArgosConfig {
+    std::wstring serverUrl;
+    std::wstring apiKey;
+    std::wstring model;
+    std::wstring fallbackModel;
+    std::wstring visionModel;
+};
+
+static ArgosConfig LoadConfig() {
+    ArgosConfig cfg;
+    // Defaults — AMD Radeon Developer API (OpenAI-compatible)
+    cfg.serverUrl = L"https://developer.amd.com.cn/radeon/api/v1";
+    cfg.apiKey = L"";  // No hardcoded key — user must provide
+    cfg.model = L"DeepSeek-V4-Flash";
+    cfg.fallbackModel = L"MiniCPM5-1B";
+    cfg.visionModel = L"Qwen3.6-35B-A3B";
+
+    // Load from config file
+    std::wstring configPath = GetConfigPath();
+    FILE* f = nullptr;
+    _wfopen_s(&f, configPath.c_str(), L"r");
+    if (f) {
+        wchar_t line[1024];
+        while (fgetws(line, 1024, f)) {
+            std::wstring l(line);
+            // Trim newline
+            if (!l.empty() && l.back() == L'\n') l.pop_back();
+            if (!l.empty() && l.back() == L'\r') l.pop_back();
+            // Parse key=value
+            size_t eq = l.find(L'=');
+            if (eq == std::wstring::npos) continue;
+            std::wstring key = l.substr(0, eq);
+            std::wstring val = l.substr(eq + 1);
+            // Trim whitespace
+            while (!key.empty() && (key.back() == L' ' || key.back() == L'\t')) key.pop_back();
+            while (!val.empty() && (val.front() == L' ' || val.front() == L'\t')) val.erase(0, 1);
+
+            if (key == L"server_url" && !val.empty()) cfg.serverUrl = val;
+            else if (key == L"api_key" && !val.empty()) cfg.apiKey = val;
+            else if (key == L"model" && !val.empty()) cfg.model = val;
+            else if (key == L"fallback_model" && !val.empty()) cfg.fallbackModel = val;
+            else if (key == L"vision_model" && !val.empty()) cfg.visionModel = val;
+        }
+        fclose(f);
+    }
+
+    // Environment variables override config file
+    wchar_t envVal[512];
+    if (GetEnvironmentVariableW(L"ARGOS_SERVER_URL", envVal, 512)) cfg.serverUrl = envVal;
+    if (GetEnvironmentVariableW(L"ARGOS_API_KEY", envVal, 512)) cfg.apiKey = envVal;
+    if (GetEnvironmentVariableW(L"ARGOS_MODEL", envVal, 512)) cfg.model = envVal;
+
+    return cfg;
+}
+
+static void SaveConfig(const std::wstring& serverUrl, const std::wstring& apiKey,
+                       const std::wstring& model) {
+    std::wstring configPath = GetConfigPath();
+    FILE* f = nullptr;
+    _wfopen_s(&f, configPath.c_str(), L"w");
+    if (!f) return;
+    fwprintf(f, L"server_url=%s\n", serverUrl.c_str());
+    fwprintf(f, L"api_key=%s\n", apiKey.c_str());
+    fwprintf(f, L"model=%s\n", model.c_str());
+    fclose(f);
+}
+
 // Global handles
 static RobotRenderer* g_renderer = nullptr;
 static AgentClient* g_agent = nullptr;
@@ -873,11 +965,12 @@ static LRESULT CALLBACK BubbleWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
                 WS_CHILD | SS_LEFT, 28, 414, 284, 34, hwnd, (HMENU)IDC_RAG_STATUS, nullptr, nullptr);
             SendMessageW(hRagStatus, WM_SETFONT, (WPARAM)g_bubbleSmallFont, TRUE);
 
-            // Pre-fill settings from g_agent defaults
+            // Pre-fill settings from loaded config
             if (g_agent) {
-                SetWindowTextW(hUrl, L"https://developer.amd.com.cn/radeon/api/v1");
-                SetWindowTextW(hKey, L"rc-c042ad0acc56669f7b46e70f924189b5ac51664ce329f5b2");
-                SetWindowTextW(hModel, L"DeepSeek-V4-Flash");
+                ArgosConfig cfg = LoadConfig();
+                SetWindowTextW(hUrl, cfg.serverUrl.c_str());
+                SetWindowTextW(hKey, cfg.apiKey.c_str());
+                SetWindowTextW(hModel, cfg.model.c_str());
             }
 
             // Show existing conversation if any
@@ -1133,6 +1226,8 @@ static LRESULT CALLBACK BubbleWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
                         if (wcslen(url) > 0) g_agent->SetServerUrl(url);
                         if (wcslen(key) > 0) g_agent->SetApiKey(key);
                         if (wcslen(model) > 0) g_agent->SetModel(model);
+                        // Persist settings to config file
+                        SaveConfig(url, key, model);
                     }
                     wchar_t text[1024] = {0};
                     GetWindowTextW(GetDlgItem(hwnd, IDC_BUBBLE_EDIT), text, 1024);
@@ -2184,12 +2279,13 @@ int APIENTRY WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLi
     g_tray->Initialize(hInstance, g_windowMgr->GetHwnd());
 
     g_agent = new AgentClient();
-    // AMD Radeon Developer API (OpenAI-compatible)
-    g_agent->SetServerUrl(L"https://developer.amd.com.cn/radeon/api/v1");
-    g_agent->SetApiKey(L"rc-c042ad0acc56669f7b46e70f924189b5ac51664ce329f5b2");
-    g_agent->SetModel(L"DeepSeek-V4-Flash");           // Primary: fast, cheap
-    g_agent->SetFallbackModel(L"MiniCPM5-1B");          // Fallback: if primary fails
-    g_agent->SetVisionModel(L"Qwen3.6-35B-A3B");        // Vision: OCR/screen analysis only
+    // Load config from file or environment variables
+    ArgosConfig cfg = LoadConfig();
+    g_agent->SetServerUrl(cfg.serverUrl);
+    if (!cfg.apiKey.empty()) g_agent->SetApiKey(cfg.apiKey);
+    g_agent->SetModel(cfg.model);
+    g_agent->SetFallbackModel(cfg.fallbackModel);
+    g_agent->SetVisionModel(cfg.visionModel);
 
     g_windowMgr->Show();
 

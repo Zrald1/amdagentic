@@ -62,7 +62,7 @@ public:
 
 private:
     std::wstring m_serverUrl = L"https://developer.amd.com.cn/radeon/api/v1";
-    std::wstring m_apiKey = L"rc-c042ad0acc56669f7b46e70f924189b5ac51664ce329f5b2";
+    std::wstring m_apiKey = L"";  // Set via config file, env var, or settings UI
     std::wstring m_model = L"DeepSeek-V4-Flash";
     std::wstring m_fallbackModel = L"MiniCPM5-1B";
     std::wstring m_visionModel = L"Qwen3.6-35B-A3B"; // Used for OCR/vision tasks

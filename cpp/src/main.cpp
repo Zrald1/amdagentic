@@ -694,6 +694,7 @@ static ArgosConfig LoadConfig() {
             // Trim whitespace
             while (!key.empty() && (key.back() == L' ' || key.back() == L'\t')) key.pop_back();
             while (!val.empty() && (val.front() == L' ' || val.front() == L'\t')) val.erase(0, 1);
+            while (!val.empty() && (val.back() == L' ' || val.back() == L'\t' || val.back() == L'\r' || val.back() == L'\n')) val.pop_back();
 
             if (key == L"server_url" && !val.empty()) cfg.serverUrl = val;
             else if (key == L"api_key" && !val.empty()) cfg.apiKey = val;

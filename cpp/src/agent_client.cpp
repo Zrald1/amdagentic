@@ -39,9 +39,15 @@ static std::wstring JsonEscape(const std::wstring& s) {
 // Extract the value for a given key from a flat JSON string.
 // Handles nested quotes minimally — good enough for OpenAI-style responses.
 static std::wstring ExtractJsonString(const std::string& json, const std::string& key) {
+    // Try both "key":" and "key": " (with optional spaces after colon)
     std::string needle = "\"" + key + "\":\"";
     size_t pos = json.find(needle);
-    if (pos == std::string::npos) return L"";
+    if (pos == std::string::npos) {
+        // Try with space: "key": "
+        needle = "\"" + key + "\": \"";
+        pos = json.find(needle);
+        if (pos == std::string::npos) return L"";
+    }
     pos += needle.size();
     std::string result;
     while (pos < json.size() && json[pos] != '"') {
@@ -471,6 +477,22 @@ std::wstring AgentClient::ChatWithModel(const std::vector<ChatMessage>& messages
     // Extract choices[0].message.content from JSON
     std::wstring content = ExtractJsonString(responseStr, "content");
     if (content.empty()) {
+        // Try reasoning_content as fallback (some models return only reasoning)
+        content = ExtractJsonString(responseStr, "reasoning_content");
+    }
+    if (content.empty()) {
+        // Log raw response for debugging
+        FILE* logFile = nullptr;
+        fopen_s(&logFile, "argos_error.log", "a");
+        if (logFile) {
+            time_t now = time(nullptr);
+            struct tm tm_buf;
+            localtime_s(&tm_buf, &now);
+            char timeBuf[64];
+            strftime(timeBuf, sizeof(timeBuf), "%Y-%m-%d %H:%M:%S", &tm_buf);
+            fprintf(logFile, "[%s] Parse failed. Raw response (first 500 chars): %.500s\n", timeBuf, responseStr.c_str());
+            fclose(logFile);
+        }
         // Try to extract error message
         std::wstring errMsg = ExtractJsonString(responseStr, "message");
         if (!errMsg.empty()) return L"[API Error: " + errMsg + L"]";
@@ -666,6 +688,7 @@ std::wstring AgentClient::ChatWithMessagesStreamingModel(const std::vector<ChatM
     std::string leftover; // incomplete SSE lines from previous chunk
 
     DWORD bytesAvailable = 0;
+    int chunkCount = 0;
     while (WinHttpQueryDataAvailable(hRequest, &bytesAvailable) && bytesAvailable > 0) {
         if (m_abort.load()) break;
 
@@ -673,6 +696,17 @@ std::wstring AgentClient::ChatWithMessagesStreamingModel(const std::vector<ChatM
         DWORD bytesRead = 0;
         if (WinHttpReadData(hRequest, buffer.data(), bytesAvailable, &bytesRead) && bytesRead > 0) {
             std::string chunkData(buffer.data(), bytesRead);
+
+            // Debug logging: log first few chunks to argos_debug.log
+            if (chunkCount < 3) {
+                FILE* dbg = nullptr;
+                fopen_s(&dbg, "argos_debug.log", "a");
+                if (dbg) {
+                    fprintf(dbg, "[STREAM chunk %d, %lu bytes] %.300s\n", chunkCount, bytesRead, chunkData.c_str());
+                    fclose(dbg);
+                }
+            }
+            chunkCount++;
 
             // Prepend any leftover from previous chunk
             chunkData = leftover + chunkData;
@@ -708,7 +742,16 @@ std::wstring AgentClient::ChatWithMessagesStreamingModel(const std::vector<ChatM
     // If streaming returned nothing, fall back to non-streaming
     if (fullResponse.empty()) {
         LogError("Empty streaming response from model=" + WideToUtf8(model) +
-                 ", url=" + WideToUtf8(m_serverUrl));
+                 ", url=" + WideToUtf8(m_serverUrl) +
+                 ", apiKeyLen=" + std::to_string(m_apiKey.size()) +
+                 ", chunksReceived=" + std::to_string(chunkCount));
+        FILE* dbg = nullptr;
+        fopen_s(&dbg, "argos_debug.log", "a");
+        if (dbg) {
+            fprintf(dbg, "[EMPTY RESPONSE] model=%s, apiKeyLen=%zu, chunks=%d\n",
+                    WideToUtf8(model).c_str(), m_apiKey.size(), chunkCount);
+            fclose(dbg);
+        }
         return L"[Error: empty streaming response]";
     }
 

@@ -149,6 +149,22 @@ bool save_page_content(const std::string& filepath);
 double fuzzy_match(const std::string& a, const std::string& b);
 bool contains_ci(const std::string& haystack, const std::string& needle);
 
+// ===== High-Level Browser Actions =====
+// These are composite actions built on top of the low-level API.
+// They return JSON strings for use by AI tool dispatchers.
+
+// Search YouTube for a query (opens search results in browser)
+std::string browser_search(const std::string& query);
+
+// Click on text visible on screen (uses UI automation + keyboard Tab fallback)
+std::string browser_click_text(const std::string& text);
+
+// Type text into the currently focused element
+std::string browser_type_active(const std::string& text);
+
+// Press a keyboard key (enter, tab, escape, etc.)
+std::string browser_press_key(const std::string& key);
+
 // ===== JSON Serialization Helpers =====
 std::string elements_to_json(const std::vector<BrowserElement>& elements);
 std::string element_to_json(const BrowserElement& element);

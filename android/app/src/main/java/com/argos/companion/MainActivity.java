@@ -2,6 +2,7 @@ package com.argos.companion;
 
 import android.app.Activity;
 import android.os.Bundle;
+import android.view.SurfaceHolder;
 import android.view.SurfaceView;
 import android.view.View;
 import android.widget.EditText;
@@ -14,7 +15,7 @@ import android.graphics.Color;
 import android.text.TextUtils;
 import android.widget.Toast;
 
-public class MainActivity extends Activity {
+public class MainActivity extends Activity implements SurfaceHolder.Callback {
 
     private SurfaceView surfaceView;
     private EditText inputEdit;
@@ -22,6 +23,7 @@ public class MainActivity extends Activity {
     private LinearLayout convoLayout;
     private ScrollView convoScroll;
     private boolean chatInProgress = false;
+    private boolean nativeReady = false;
 
     static {
         System.loadLibrary("argos");
@@ -83,8 +85,9 @@ public class MainActivity extends Activity {
 
         setContentView(root);
 
-        // Initialize native renderer with the SurfaceView
-        nativeInit(surfaceView);
+        // Register for surface callbacks — nativeInit will be called
+        // when the surface is actually created
+        surfaceView.getHolder().addCallback(this);
 
         sendBtn.setOnClickListener(v -> sendMessage());
         inputEdit.setOnEditorActionListener((v, actionId, event) -> {
@@ -176,6 +179,26 @@ public class MainActivity extends Activity {
     protected void onDestroy() {
         super.onDestroy();
         nativeDestroy();
+    }
+
+    // SurfaceHolder.Callback
+    @Override
+    public void surfaceCreated(SurfaceHolder holder) {
+        // Surface is now valid — safe to initialize native renderer
+        nativeInit(surfaceView);
+        nativeReady = true;
+    }
+
+    @Override
+    public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
+        // Pass through to native if needed
+    }
+
+    @Override
+    public void surfaceDestroyed(SurfaceHolder holder) {
+        nativeReady = false;
+        // Pause rendering when surface is destroyed
+        nativePause();
     }
 
     // Native methods

@@ -108,13 +108,32 @@ Java_com_argos_companion_MainActivity_nativeInit(JNIEnv* env, jobject activity, 
     jclass svClass = env->GetObjectClass(surfaceView);
     jmethodID getHolder = env->GetMethodID(svClass, "getHolder", "()Landroid/view/SurfaceHolder;");
     jobject holder = env->CallObjectMethod(surfaceView, getHolder);
+    if (!holder) {
+        LOGE("SurfaceHolder is null — surface not ready yet");
+        return;
+    }
     jclass holderClass = env->GetObjectClass(holder);
     jmethodID getSurface = env->GetMethodID(holderClass, "getSurface", "()Landroid/view/Surface;");
     jobject surface = env->CallObjectMethod(holder, getSurface);
-    if (surface) {
-        g_window = ANativeWindow_fromSurface(env, surface);
+    if (!surface) {
+        LOGE("Surface is null — surface not ready yet");
+        env->DeleteLocalRef(holderClass);
+        env->DeleteLocalRef(holder);
+        env->DeleteLocalRef(svClass);
+        return;
+    }
+    g_window = ANativeWindow_fromSurface(env, surface);
+    env->DeleteLocalRef(surface);
+    env->DeleteLocalRef(holderClass);
+    env->DeleteLocalRef(holder);
+    env->DeleteLocalRef(svClass);
+
+    if (g_window) {
         LOGI("Got ANativeWindow: %p, size: %dx%d", g_window,
              ANativeWindow_getWidth(g_window), ANativeWindow_getHeight(g_window));
+    } else {
+        LOGE("ANativeWindow_fromSurface returned null");
+        return;
     }
 
     // Set app data dir

@@ -39,11 +39,11 @@ if /i "%CONFIG%"=="Release" (
 
 REM ── Linker flags ────────────────────────────────────────────────────
 set LDFLAGS=/SUBSYSTEM:WINDOWS
-set LIBS=d2d1.lib dwmapi.lib winhttp.lib shell32.lib user32.lib gdi32.lib
+set LIBS=d2d1.lib dwmapi.lib winhttp.lib shell32.lib user32.lib gdi32.lib ole32.lib oleaut32.lib uiautomationcore.lib
 
 REM ── Source files ────────────────────────────────────────────────────
 set SOURCES=src\main.cpp src\window_manager.cpp src\robot_renderer.cpp src\tray_icon.cpp src\agent_client.cpp src\argos_tools.cpp
-set TOOL_SOURCES=src\tools\text_utils.cpp src\tools\file_mapper.cpp src\tools\vector_store.cpp src\tools\image_hasher.cpp src\tools\content_indexer.cpp src\tools\search_engine.cpp src\tools\json_writer.cpp src\tools\browser_tool.cpp src\tools\screen_context.cpp src\tools\ui_locator.cpp
+set TOOL_SOURCES=src\tools\text_utils.cpp src\tools\file_mapper.cpp src\tools\vector_store.cpp src\tools\image_hasher.cpp src\tools\content_indexer.cpp src\tools\search_engine.cpp src\tools\json_writer.cpp src\tools\browser_tool.cpp src\tools\screen_context.cpp src\tools\ui_locator.cpp src\tools\computer_use_tool.cpp
 
 REM ── Compile and link ────────────────────────────────────────────────
 echo Building Argos (%CONFIG%)...

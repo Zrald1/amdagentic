@@ -5,6 +5,12 @@
     #define NOMINMAX
     #endif
     #include <windows.h>
+    #include <objbase.h>
+    #include <oleauto.h>
+    #include <UIAutomation.h>
+    #pragma comment(lib, "ole32.lib")
+    #pragma comment(lib, "oleaut32.lib")
+    #pragma comment(lib, "uiautomationcore.lib")
 #elif defined(__linux__)
     #include <X11/Xlib.h>
 #elif defined(__APPLE__)
@@ -1495,9 +1501,25 @@ PageInfo get_page_info() {
     return PageInfo{};
 }
 
+// Forward declarations for page content extraction
+static std::string get_page_content_uia();
+static void collect_text_from_uia(IUIAutomation* pAutomation, IUIAutomationElement* pElement,
+                                   std::string& result, int depth);
+static std::string get_page_content_clipboard();
+
 std::string get_page_content() {
     if (g_simulation_mode) return current_page().content_text;
 #if defined(_WIN32)
+    // Method 1: UI Automation — walk the browser's element tree to collect text
+    // Chrome and Edge expose their DOM through UIA as Text and Document elements
+    std::string uia_content = get_page_content_uia();
+    if (!uia_content.empty()) return uia_content;
+
+    // Method 2: Clipboard fallback — Ctrl+A, Ctrl+C, read clipboard
+    std::string clip_content = get_page_content_clipboard();
+    if (!clip_content.empty()) return clip_content;
+
+    // Method 3: Just return the window title as last resort
     HWND fg = GetForegroundWindow();
     if (fg) {
         wchar_t title[512] = {};
@@ -1505,10 +1527,189 @@ std::string get_page_content() {
         if (title[0]) {
             std::wstring wTitle(title);
             return std::string(wTitle.begin(), wTitle.end()) +
-                "\n[Browser is open. Use screen_capture or screen_ocr for full page content.]";
+                "\n[Could not extract page content. Try screen_capture for visual analysis.]";
         }
     }
     return "[No browser window detected]";
+#else
+    return "";
+#endif
+}
+
+// UI Automation: walk browser element tree to collect all text content
+static std::string get_page_content_uia() {
+#if defined(_WIN32)
+    std::string result;
+
+    // Find the foreground window (should be the browser)
+    HWND fg = GetForegroundWindow();
+    if (!fg) return result;
+
+    // Initialize COM
+    HRESULT hr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    if (FAILED(hr) && hr != RPC_E_CHANGED_MODE) return result;
+    bool need_co_uninit = (hr != RPC_E_CHANGED_MODE);
+
+    // Create UI Automation instance
+    IUIAutomation* pAutomation = nullptr;
+    hr = CoCreateInstance(CLSID_CUIAutomation, nullptr, CLSCTX_INPROC_SERVER,
+                          IID_PPV_ARGS(&pAutomation));
+    if (FAILED(hr) || !pAutomation) {
+        if (need_co_uninit) CoUninitialize();
+        return result;
+    }
+
+    // Get element from the foreground window
+    IUIAutomationElement* pRoot = nullptr;
+    hr = pAutomation->ElementFromHandle(fg, &pRoot);
+    if (FAILED(hr) || !pRoot) {
+        pAutomation->Release();
+        if (need_co_uninit) CoUninitialize();
+        return result;
+    }
+
+    // Collect text from the element tree
+    // We look for Text and Document control types, and also get Name property
+    collect_text_from_uia(pAutomation, pRoot, result, 0);
+
+    pRoot->Release();
+    pAutomation->Release();
+    if (need_co_uninit) CoUninitialize();
+
+    // Trim and return
+    if (result.size() > 50000) result = result.substr(0, 50000) + "\n[...truncated...]";
+    return result;
+#else
+    return "";
+#endif
+}
+
+// Recursively walk UIA tree and collect text from elements
+static void collect_text_from_uia(IUIAutomation* pAutomation, IUIAutomationElement* pElement,
+                                   std::string& result, int depth) {
+#if defined(_WIN32)
+    if (!pElement || depth > 15) return;
+
+    // Get element name (often contains visible text)
+    BSTR name = nullptr;
+    if (SUCCEEDED(pElement->get_CurrentName(&name)) && name) {
+        std::wstring wName(name);
+        if (!wName.empty() && wName.size() < 2000) {
+            std::string sName(wName.begin(), wName.end());
+            // Skip generic/system names
+            if (sName != "Desktop" && sName != "Taskbar" &&
+                sName.find("Microsoft Edge") == std::string::npos &&
+                sName.find("Google Chrome") == std::string::npos) {
+                if (!result.empty()) result += "\n";
+                result += sName;
+            }
+        }
+        SysFreeString(name);
+    }
+
+    // Try to get Value property (useful for text fields, address bar)
+    VARIANT varValue;
+    VariantInit(&varValue);
+    if (SUCCEEDED(pElement->GetCurrentPropertyValue(UIA_ValueValuePropertyId, &varValue))) {
+        if (varValue.vt == VT_BSTR && varValue.bstrVal) {
+            std::wstring wValue(varValue.bstrVal);
+            if (!wValue.empty() && wValue.size() < 5000) {
+                std::string sValue(wValue.begin(), wValue.end());
+                if (sValue.find("http") == 0 || sValue.find("https") == 0) {
+                    // This is likely the URL
+                    result = "[URL: " + sValue + "]\n" + result;
+                }
+            }
+        }
+        VariantClear(&varValue);
+    }
+
+    // Try TextPattern for document elements (gives full page text in browsers)
+    IUIAutomationTextPattern* pTextPattern = nullptr;
+    if (SUCCEEDED(pElement->GetCurrentPattern(UIA_TextPatternId, (IUnknown**)&pTextPattern)) && pTextPattern) {
+        IUIAutomationTextRange* pRange = nullptr;
+        if (SUCCEEDED(pTextPattern->get_DocumentRange(&pRange)) && pRange) {
+            BSTR text = nullptr;
+            if (SUCCEEDED(pRange->GetText(-1, &text)) && text) {
+                std::wstring wText(text);
+                if (!wText.empty()) {
+                    std::string sText(wText.begin(), wText.end());
+                    if (sText.size() > 50) {
+                        result += "\n" + sText;
+                    }
+                }
+                SysFreeString(text);
+            }
+            pRange->Release();
+        }
+        pTextPattern->Release();
+    }
+
+    // Walk children using control view walker
+    IUIAutomationTreeWalker* pWalker = nullptr;
+    pAutomation->get_ControlViewWalker(&pWalker);
+    if (!pWalker) return;
+
+    IUIAutomationElement* pChild = nullptr;
+    pWalker->GetFirstChildElement(pElement, &pChild);
+    while (pChild) {
+        collect_text_from_uia(pAutomation, pChild, result, depth + 1);
+        IUIAutomationElement* pNext = nullptr;
+        pWalker->GetNextSiblingElement(pChild, &pNext);
+        pChild->Release();
+        pChild = pNext;
+    }
+    pWalker->Release();
+#endif
+}
+
+// Clipboard fallback: Ctrl+A, Ctrl+C, read clipboard
+static std::string get_page_content_clipboard() {
+#if defined(_WIN32)
+    // Clear clipboard first
+    OpenClipboard(nullptr);
+    EmptyClipboard();
+    CloseClipboard();
+
+    // Small delay to ensure clipboard is clear
+    Sleep(50);
+
+    // Send Ctrl+A to select all text on the page
+    keybd_event(VK_CONTROL, 0, 0, 0);
+    keybd_event('A', 0, 0, 0);
+    keybd_event('A', 0, KEYEVENTF_KEYUP, 0);
+    keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, 0);
+    Sleep(200);
+
+    // Send Ctrl+C to copy
+    keybd_event(VK_CONTROL, 0, 0, 0);
+    keybd_event('C', 0, 0, 0);
+    keybd_event('C', 0, KEYEVENTF_KEYUP, 0);
+    keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, 0);
+    Sleep(300);
+
+    // Read clipboard text
+    std::string result;
+    if (OpenClipboard(nullptr)) {
+        HANDLE hData = GetClipboardData(CF_UNICODETEXT);
+        if (hData) {
+            wchar_t* pszText = static_cast<wchar_t*>(GlobalLock(hData));
+            if (pszText) {
+                std::wstring wText(pszText);
+                result = std::string(wText.begin(), wText.end());
+                GlobalUnlock(hData);
+            }
+        }
+        CloseClipboard();
+    }
+
+    // Deselect by pressing Escape
+    keybd_event(VK_ESCAPE, 0, 0, 0);
+    keybd_event(VK_ESCAPE, 0, KEYEVENTF_KEYUP, 0);
+
+    // Trim large content
+    if (result.size() > 50000) result = result.substr(0, 50000) + "\n[...truncated...]";
+    return result;
 #else
     return "";
 #endif
@@ -2424,6 +2625,85 @@ bool save_page_content(const std::string& filepath) {
         return true;
     }
     return false;
+}
+
+// ===== High-Level Browser Actions =====
+
+static bool contains_ci_str(const std::string& haystack, const std::string& needle) {
+    if (needle.empty()) return true;
+    if (haystack.size() < needle.size()) return false;
+    auto to_lower = [](const std::string& s) {
+        std::string r;
+        for (char c : s) r += static_cast<char>(tolower(static_cast<unsigned char>(c)));
+        return r;
+    };
+    return to_lower(haystack).find(to_lower(needle)) != std::string::npos;
+}
+
+std::string browser_search(const std::string& query) {
+    // Build a YouTube search URL and navigate to it
+    std::string url = "https://www.youtube.com/results?search_query=" + query;
+    // URL-encode spaces as +
+    for (auto& c : url) if (c == ' ') c = '+';
+    bool ok = navigate(url);
+    if (ok) {
+#if defined(_WIN32)
+        // Give the browser time to load the search results
+        Sleep(3000);
+#endif
+    }
+    return ok ? "{\"success\":true,\"url\":\"" + url + "\",\"message\":\"YouTube search results opened. Use browser_click_text to click a video title.\"}"
+              : "{\"success\":false}";
+}
+
+std::string browser_click_text(const std::string& text) {
+    // On Windows, browser web content is not accessible via EnumChildWindows.
+    // Strategy: Use keyboard navigation — Tab through focusable elements and
+    // press Enter when we find one matching the text.
+#if defined(_WIN32)
+    // Fallback: Use keyboard Tab navigation to find and click the element
+    // Tab through focusable elements (up to 30 tabs), check if focused element
+    // text matches, then press Enter
+    for (int i = 0; i < 30; i++) {
+        // Press Tab to move to next focusable element
+        keybd_event(VK_TAB, 0, 0, 0);
+        keybd_event(VK_TAB, 0, KEYEVENTF_KEYUP, 0);
+        Sleep(100);
+
+        // Get the focused window title to check if it matches
+        HWND fg = GetForegroundWindow();
+        if (fg) {
+            wchar_t title[512] = {};
+            GetWindowTextW(fg, title, 512);
+            if (title[0]) {
+                std::wstring wTitle(title);
+                std::string titleStr(wTitle.begin(), wTitle.end());
+                // Check if the title contains our search text
+                if (contains_ci_str(titleStr, text)) {
+                    // Press Enter to activate this element
+                    keybd_event(VK_RETURN, 0, 0, 0);
+                    keybd_event(VK_RETURN, 0, KEYEVENTF_KEYUP, 0);
+                    Sleep(2000);
+                    return "{\"success\":true,\"clicked_text\":\"" + text + "\",\"method\":\"keyboard_tab\",\"tabs\":" + std::to_string(i + 1) + "}";
+                }
+            }
+        }
+    }
+    return "{\"success\":false,\"error\":\"Could not find text on screen: " + text + ". Try using mouse_click with coordinates from screen_capture.\"}";
+#else
+    (void)text;
+    return "{\"success\":false,\"error\":\"Not supported on this platform\"}";
+#endif
+}
+
+std::string browser_type_active(const std::string& text) {
+    bool ok = type_text_into_active_element(text);
+    return ok ? "{\"success\":true}" : "{\"success\":false}";
+}
+
+std::string browser_press_key(const std::string& key) {
+    bool ok = press_key(key);
+    return ok ? "{\"success\":true}" : "{\"success\":false}";
 }
 
 } // namespace browsertool

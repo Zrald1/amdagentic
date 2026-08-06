@@ -4,6 +4,7 @@
 #include "tools/browser_tool.h"
 #include "tools/screen_context.h"
 #include "tools/ui_locator.h"
+#include "tools/computer_use_tool.h"
 
 #include <sstream>
 #include <filesystem>
@@ -187,17 +188,6 @@ std::string stats(const std::string& path, bool include_hidden) {
 
 // ── Browser Tool ──
 
-static bool contains_ci_helper(const std::string& haystack, const std::string& needle) {
-    if (needle.empty()) return true;
-    if (haystack.size() < needle.size()) return false;
-    auto to_lower = [](const std::string& s) {
-        std::string r;
-        for (char c : s) r += static_cast<char>(tolower(static_cast<unsigned char>(c)));
-        return r;
-    };
-    return to_lower(haystack).find(to_lower(needle)) != std::string::npos;
-}
-
 std::string browser_navigate(const std::string& url) {
     bool ok = browsertool::navigate(url);
     return ok ? "{\"success\":true,\"url\":\"" + url + "\"}" : "{\"success\":false}";
@@ -245,276 +235,49 @@ std::string browser_summarize() {
 }
 
 std::string browser_search(const std::string& query) {
-    // Build a YouTube search URL and navigate to it
-    std::string url = "https://www.youtube.com/results?search_query=" + query;
-    // URL-encode spaces as +
-    for (auto& c : url) if (c == ' ') c = '+';
-    bool ok = browsertool::navigate(url);
-    if (ok) {
-        // Give the browser time to load the search results
-        #if defined(_WIN32)
-        Sleep(3000);
-        #endif
-    }
-    return ok ? "{\"success\":true,\"url\":\"" + url + "\",\"message\":\"YouTube search results opened. Use browser_click_text to click a video title.\"}" : "{\"success\":false}";
+    return browsertool::browser_search(query);
 }
 
 std::string browser_click_text(const std::string& text) {
-    // On Windows, browser web content is not accessible via EnumChildWindows.
-    // Strategy: Use keyboard navigation — Tab through focusable elements and
-    // press Enter when we find one matching the text. This works for YouTube
-    // and most web pages since Tab moves through links/buttons.
-#if defined(_WIN32)
-    // First try UI locator (works for native apps)
-    auto results = uilocator::search_clickable(text, "");
-    if (!results.empty()) {
-        auto& r = results[0];
-        int cx = r.element.bounds.x + r.element.bounds.width / 2;
-        int cy = r.element.bounds.y + r.element.bounds.height / 2;
-        bool ok = uilocator::click_at(cx, cy);
-        if (ok) {
-            Sleep(2000);
-            return "{\"success\":true,\"clicked_text\":\"" + text + "\",\"method\":\"ui_automation\"}";
-        }
-    }
-
-    // Fallback: Use keyboard Tab navigation to find and click the element
-    // Tab through focusable elements (up to 30 tabs), check if focused element
-    // text matches, then press Enter
-    for (int i = 0; i < 30; i++) {
-        // Press Tab to move to next focusable element
-        keybd_event(VK_TAB, 0, 0, 0);
-        keybd_event(VK_TAB, 0, KEYEVENTF_KEYUP, 0);
-        Sleep(100);
-
-        // Get the focused window title to check if it matches
-        HWND fg = GetForegroundWindow();
-        if (fg) {
-            wchar_t title[512] = {};
-            GetWindowTextW(fg, title, 512);
-            if (title[0]) {
-                std::wstring wTitle(title);
-                std::string titleStr(wTitle.begin(), wTitle.end());
-                // Check if the title contains our search text
-                if (contains_ci_helper(titleStr, text)) {
-                    // Press Enter to activate this element
-                    keybd_event(VK_RETURN, 0, 0, 0);
-                    keybd_event(VK_RETURN, 0, KEYEVENTF_KEYUP, 0);
-                    Sleep(2000);
-                    return "{\"success\":true,\"clicked_text\":\"" + text + "\",\"method\":\"keyboard_tab\",\"tabs\":" + std::to_string(i + 1) + "}";
-                }
-            }
-        }
-    }
-    return "{\"success\":false,\"error\":\"Could not find text on screen: " + text + ". Try using mouse_click with coordinates from screen_capture.\"}";
-#else
-    return "{\"success\":false,\"error\":\"Not supported on this platform\"}";
-#endif
+    return browsertool::browser_click_text(text);
 }
 
 std::string browser_type_active(const std::string& text) {
-    bool ok = browsertool::type_text_into_active_element(text);
-    return ok ? "{\"success\":true}" : "{\"success\":false}";
+    return browsertool::browser_type_active(text);
 }
 
 std::string browser_press_key(const std::string& key) {
-    bool ok = browsertool::press_key(key);
-    return ok ? "{\"success\":true}" : "{\"success\":false}";
+    return browsertool::browser_press_key(key);
 }
 
-// ── Computer Use Tools (direct mouse & keyboard control) ──
+// ── Computer Use Tools (delegates to computetool::) ──
 
 std::string mouse_click(int x, int y) {
-#if defined(_WIN32)
-    INPUT inputs[3] = {};
-    // Move mouse
-    inputs[0].type = INPUT_MOUSE;
-    inputs[0].mi.dx = (LONG)(x * 65535.0 / GetSystemMetrics(SM_CXSCREEN));
-    inputs[0].mi.dy = (LONG)(y * 65535.0 / GetSystemMetrics(SM_CYSCREEN));
-    inputs[0].mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE;
-    // Left button down
-    inputs[1].type = INPUT_MOUSE;
-    inputs[1].mi.dwFlags = MOUSEEVENTF_LEFTDOWN;
-    // Left button up
-    inputs[2].type = INPUT_MOUSE;
-    inputs[2].mi.dwFlags = MOUSEEVENTF_LEFTUP;
-    SendInput(3, inputs, sizeof(INPUT));
-    Sleep(150);
-    return "{\"success\":true,\"x\":" + std::to_string(x) + ",\"y\":" + std::to_string(y) + "}";
-#else
-    return "{\"success\":false,\"error\":\"Not supported\"}";
-#endif
+    return computetool::mouse_click(x, y);
 }
 
 std::string mouse_right_click(int x, int y) {
-#if defined(_WIN32)
-    INPUT inputs[3] = {};
-    inputs[0].type = INPUT_MOUSE;
-    inputs[0].mi.dx = (LONG)(x * 65535.0 / GetSystemMetrics(SM_CXSCREEN));
-    inputs[0].mi.dy = (LONG)(y * 65535.0 / GetSystemMetrics(SM_CYSCREEN));
-    inputs[0].mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE;
-    inputs[1].type = INPUT_MOUSE;
-    inputs[1].mi.dwFlags = MOUSEEVENTF_RIGHTDOWN;
-    inputs[2].type = INPUT_MOUSE;
-    inputs[2].mi.dwFlags = MOUSEEVENTF_RIGHTUP;
-    SendInput(3, inputs, sizeof(INPUT));
-    Sleep(150);
-    return "{\"success\":true,\"x\":" + std::to_string(x) + ",\"y\":" + std::to_string(y) + "}";
-#else
-    return "{\"success\":false,\"error\":\"Not supported\"}";
-#endif
+    return computetool::mouse_right_click(x, y);
 }
 
 std::string mouse_double_click(int x, int y) {
-#if defined(_WIN32)
-    mouse_click(x, y);
-    Sleep(100);
-    INPUT inputs[2] = {};
-    inputs[0].type = INPUT_MOUSE;
-    inputs[0].mi.dwFlags = MOUSEEVENTF_LEFTDOWN;
-    inputs[1].type = INPUT_MOUSE;
-    inputs[1].mi.dwFlags = MOUSEEVENTF_LEFTUP;
-    SendInput(2, inputs, sizeof(INPUT));
-    Sleep(150);
-    return "{\"success\":true,\"x\":" + std::to_string(x) + ",\"y\":" + std::to_string(y) + "}";
-#else
-    return "{\"success\":false,\"error\":\"Not supported\"}";
-#endif
+    return computetool::mouse_double_click(x, y);
 }
 
 std::string mouse_move(int x, int y) {
-#if defined(_WIN32)
-    INPUT input = {};
-    input.type = INPUT_MOUSE;
-    input.mi.dx = (LONG)(x * 65535.0 / GetSystemMetrics(SM_CXSCREEN));
-    input.mi.dy = (LONG)(y * 65535.0 / GetSystemMetrics(SM_CYSCREEN));
-    input.mi.dwFlags = MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE;
-    SendInput(1, &input, sizeof(INPUT));
-    return "{\"success\":true,\"x\":" + std::to_string(x) + ",\"y\":" + std::to_string(y) + "}";
-#else
-    return "{\"success\":false,\"error\":\"Not supported\"}";
-#endif
+    return computetool::mouse_move(x, y);
 }
 
 std::string keyboard_type(const std::string& text) {
-#if defined(_WIN32)
-    for (char c : text) {
-        if (c == ' ') {
-            keybd_event(VK_SPACE, 0, 0, 0);
-            keybd_event(VK_SPACE, 0, KEYEVENTF_KEYUP, 0);
-        } else if (c == '\n' || c == '\r') {
-            keybd_event(VK_RETURN, 0, 0, 0);
-            keybd_event(VK_RETURN, 0, KEYEVENTF_KEYUP, 0);
-        } else if ((unsigned char)c >= 0x80) {
-            INPUT input = {};
-            input.type = INPUT_KEYBOARD;
-            input.ki.wScan = (unsigned char)c;
-            input.ki.dwFlags = KEYEVENTF_UNICODE;
-            SendInput(1, &input, sizeof(INPUT));
-            input.ki.dwFlags = KEYEVENTF_UNICODE | KEYEVENTF_KEYUP;
-            SendInput(1, &input, sizeof(INPUT));
-        } else {
-            short vk = VkKeyScanA(c);
-            if (vk != -1) {
-                BYTE vkey = vk & 0xFF;
-                bool shift = (vk & 0x100) != 0;
-                if (shift) keybd_event(VK_SHIFT, 0, 0, 0);
-                keybd_event(vkey, 0, 0, 0);
-                keybd_event(vkey, 0, KEYEVENTF_KEYUP, 0);
-                if (shift) keybd_event(VK_SHIFT, 0, KEYEVENTF_KEYUP, 0);
-            }
-        }
-        Sleep(10);
-    }
-    return "{\"success\":true,\"text\":\"" + text + "\"}";
-#else
-    return "{\"success\":false,\"error\":\"Not supported\"}";
-#endif
-}
-
-static WORD keyNameToVk(const std::string& key) {
-    std::string lower = key;
-    for (auto& c : lower) c = (char)tolower((unsigned char)c);
-    if (lower == "enter" || lower == "return") return VK_RETURN;
-    if (lower == "tab") return VK_TAB;
-    if (lower == "escape" || lower == "esc") return VK_ESCAPE;
-    if (lower == "backspace" || lower == "back") return VK_BACK;
-    if (lower == "delete" || lower == "del") return VK_DELETE;
-    if (lower == "space") return VK_SPACE;
-    if (lower == "up") return VK_UP;
-    if (lower == "down") return VK_DOWN;
-    if (lower == "left") return VK_LEFT;
-    if (lower == "right") return VK_RIGHT;
-    if (lower == "home") return VK_HOME;
-    if (lower == "end") return VK_END;
-    if (lower == "pageup") return VK_PRIOR;
-    if (lower == "pagedown") return VK_NEXT;
-    if (lower == "f1") return VK_F1;
-    if (lower == "f2") return VK_F2;
-    if (lower == "f3") return VK_F3;
-    if (lower == "f4") return VK_F4;
-    if (lower == "f5") return VK_F5;
-    if (lower == "f6") return VK_F6;
-    if (lower == "f7") return VK_F7;
-    if (lower == "f8") return VK_F8;
-    if (lower == "f9") return VK_F9;
-    if (lower == "f10") return VK_F10;
-    if (lower == "f11") return VK_F11;
-    if (lower == "f12") return VK_F12;
-    if (lower == "ctrl" || lower == "control") return VK_CONTROL;
-    if (lower == "shift") return VK_SHIFT;
-    if (lower == "alt") return VK_MENU;
-    if (lower == "win" || lower == "meta") return VK_LWIN;
-    if (key.size() == 1) return VkKeyScanA(key[0]) & 0xFF;
-    return 0;
+    return computetool::keyboard_type(text);
 }
 
 std::string keyboard_key(const std::string& key) {
-#if defined(_WIN32)
-    WORD vk = keyNameToVk(key);
-    if (vk == 0) return "{\"success\":false,\"error\":\"Unknown key: " + key + "\"}";
-    keybd_event(vk, 0, 0, 0);
-    keybd_event(vk, 0, KEYEVENTF_KEYUP, 0);
-    Sleep(100);
-    return "{\"success\":true,\"key\":\"" + key + "\"}";
-#else
-    return "{\"success\":false,\"error\":\"Not supported\"}";
-#endif
+    return computetool::keyboard_key(key);
 }
 
 std::string keyboard_hotkey(const std::string& keys) {
-#if defined(_WIN32)
-    // Parse keys separated by + (e.g. "ctrl+c", "shift+tab", "alt+f4")
-    std::vector<std::string> parts;
-    std::string current;
-    for (char c : keys) {
-        if (c == '+') {
-            if (!current.empty()) { parts.push_back(current); current.clear(); }
-        } else {
-            current += c;
-        }
-    }
-    if (!current.empty()) parts.push_back(current);
-    if (parts.empty()) return "{\"success\":false,\"error\":\"No keys specified\"}";
-
-    // Press all keys down in order
-    std::vector<WORD> vks;
-    for (const auto& p : parts) {
-        WORD vk = keyNameToVk(p);
-        if (vk == 0) return "{\"success\":false,\"error\":\"Unknown key: " + p + "\"}";
-        vks.push_back(vk);
-        keybd_event(vk, 0, 0, 0);
-        Sleep(20);
-    }
-    // Release in reverse order
-    for (int i = (int)vks.size() - 1; i >= 0; i--) {
-        keybd_event(vks[i], 0, KEYEVENTF_KEYUP, 0);
-        Sleep(20);
-    }
-    return "{\"success\":true,\"hotkey\":\"" + keys + "\"}";
-#else
-    return "{\"success\":false,\"error\":\"Not supported\"}";
-#endif
+    return computetool::keyboard_hotkey(keys);
 }
 
 // ── Screen Context ──

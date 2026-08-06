@@ -16,6 +16,8 @@ public class ArgosAccessibilityService extends AccessibilityService {
 
     private static final String TAG = "Argos";
     private static ArgosAccessibilityService instance;
+    private static String currentApp = "";
+    private static String currentAppLabel = "";
 
     @Override
     public void onServiceConnected() {
@@ -36,7 +38,44 @@ public class ArgosAccessibilityService extends AccessibilityService {
 
     @Override
     public void onAccessibilityEvent(AccessibilityEvent event) {
-        // We don't need to handle events proactively — we poll on demand
+        // Detect app switches via TYPE_WINDOW_STATE_CHANGED
+        if (event.getEventType() == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            String pkg = event.getPackageName() != null ? event.getPackageName().toString() : "";
+            if (pkg.isEmpty() || pkg.equals("com.argos.companion")) return;
+            // Ignore system UI packages
+            if (pkg.startsWith("com.android.systemui") || pkg.startsWith("android")) return;
+
+            if (!pkg.equals(currentApp)) {
+                currentApp = pkg;
+                currentAppLabel = getAppLabel(pkg);
+                Log.i(TAG, "App switched to: " + pkg + " (" + currentAppLabel + ")");
+
+                // Notify FloatingRobotService
+                FloatingRobotService svc = FloatingRobotService.getInstance();
+                if (svc != null) {
+                    svc.onAppChanged(currentAppLabel);
+                }
+            }
+        }
+    }
+
+    // Get friendly app name from package
+    private String getAppLabel(String pkg) {
+        try {
+            android.content.pm.PackageManager pm = getPackageManager();
+            android.content.pm.ApplicationInfo ai = pm.getApplicationInfo(pkg, 0);
+            return (String) pm.getApplicationLabel(ai);
+        } catch (Exception e) {
+            return pkg;
+        }
+    }
+
+    public static String getCurrentApp() {
+        return currentApp;
+    }
+
+    public static String getCurrentAppLabel() {
+        return currentAppLabel;
     }
 
     @Override

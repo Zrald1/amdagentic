@@ -239,6 +239,7 @@ void AgentClientCore::initSystemPrompt() {
         "Use [TOOL:scroll down] to scroll down the page.\n"
         "Use [TOOL:screen_text] again to read more content.\n\n"
         "Do NOT auto-trigger tools on simple messages. Only use tools when needed.\n"
+        "User messages may include [Context: User is currently using <app>] — use this to give relevant answers.\n"
         "If primary model is unavailable, fallback model is used automatically.";
 }
 

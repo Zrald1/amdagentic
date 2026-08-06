@@ -61,6 +61,11 @@ public class FloatingRobotService extends Service implements SurfaceHolder.Callb
     private int screenWidth = 1080;
     private int screenHeight = 1920;
 
+    // Awareness overlay — small floating text near robot
+    private TextView awarenessLabel;
+    private WindowManager.LayoutParams awarenessParams;
+    private android.os.Handler awarenessHandler = new android.os.Handler();
+
     private static FloatingRobotService instance;
 
     @Override
@@ -659,6 +664,10 @@ public class FloatingRobotService extends Service implements SurfaceHolder.Callb
     public void onDestroy() {
         super.onDestroy();
         nativeDestroy();
+        if (awarenessLabel != null) {
+            try { windowManager.removeView(awarenessLabel); } catch (Exception e) {}
+            awarenessLabel = null;
+        }
         if (surfaceView != null) {
             windowManager.removeView(surfaceView);
             surfaceView = null;
@@ -674,8 +683,67 @@ public class FloatingRobotService extends Service implements SurfaceHolder.Callb
         return instance;
     }
 
+    // ── Proactive Screen Awareness ──
+    // Called by ArgosAccessibilityService when user switches to a different app
+
+    public void onAppChanged(final String appLabel) {
+        awarenessHandler.post(() -> {
+            // Don't show awareness while chat bubble is open
+            if (bubbleVisible) return;
+
+            if (awarenessLabel == null) {
+                awarenessLabel = new TextView(this);
+                awarenessLabel.setTextColor(Color.rgb(255, 255, 255));
+                awarenessLabel.setTextSize(12f);
+                awarenessLabel.setPadding(20, 8, 20, 8);
+                awarenessLabel.setBackgroundColor(Color.argb(180, 20, 20, 30));
+                awarenessParams = new WindowManager.LayoutParams(
+                    WindowManager.LayoutParams.WRAP_CONTENT,
+                    WindowManager.LayoutParams.WRAP_CONTENT,
+                    layoutType,
+                    WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
+                    PixelFormat.TRANSLUCENT
+                );
+                awarenessParams.gravity = Gravity.TOP | Gravity.START;
+            }
+
+            awarenessLabel.setText("👀 " + appLabel);
+
+            // Position above the robot
+            awarenessParams.x = (int) robotScreenX - 20;
+            awarenessParams.y = (int) robotScreenY - 60;
+            if (awarenessParams.y < 0) awarenessParams.y = (int) robotScreenY + (int) robotSize + 10;
+
+            try {
+                if (awarenessLabel.getWindowToken() == null) {
+                    windowManager.addView(awarenessLabel, awarenessParams);
+                } else {
+                    windowManager.updateViewLayout(awarenessLabel, awarenessParams);
+                }
+                awarenessLabel.setVisibility(View.VISIBLE);
+            } catch (Exception e) {
+                // Ignore — might fail if window is already removed
+            }
+
+            // Auto-hide after 3 seconds
+            awarenessHandler.removeCallbacksAndMessages(null);
+            awarenessHandler.postDelayed(() -> {
+                if (awarenessLabel != null) {
+                    awarenessLabel.setVisibility(View.GONE);
+                }
+            }, 3000);
+        });
+    }
+
     // ── Browser / Screen interaction via Accessibility Service ──
     // Called from C++ via JNI to interact with the user's browser and screen
+
+    // Returns the current app the user is looking at (for AI context)
+    public String getCurrentAppContext() {
+        String label = ArgosAccessibilityService.getCurrentAppLabel();
+        if (label == null || label.isEmpty()) return "";
+        return label;
+    }
 
     public String openUrlJava(String url) {
         ArgosAccessibilityService svc = ArgosAccessibilityService.getInstance();

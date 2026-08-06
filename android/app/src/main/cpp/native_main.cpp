@@ -208,6 +208,31 @@ Java_com_argos_companion_FloatingRobotService_nativeSendChat(JNIEnv* env, jobjec
 
     LOGI("nativeSendChat: %s", userMsg.c_str());
 
+    // Get current app context from Java (proactive screen awareness)
+    std::string currentAppContext;
+    {
+        jclass cls = env->GetObjectClass(service);
+        jmethodID mid = env->GetMethodID(cls, "getCurrentAppContext", "()Ljava/lang/String;");
+        if (mid) {
+            jstring jresult = (jstring) env->CallObjectMethod(service, mid);
+            if (jresult) {
+                const char* chars = env->GetStringUTFChars(jresult, nullptr);
+                if (chars) {
+                    currentAppContext = chars;
+                    env->ReleaseStringUTFChars(jresult, chars);
+                }
+                env->DeleteLocalRef(jresult);
+            }
+        }
+        env->DeleteLocalRef(cls);
+        if (env->ExceptionCheck()) env->ExceptionClear();
+    }
+
+    // Prepend current app context to the message
+    if (!currentAppContext.empty()) {
+        userMsg = "[Context: User is currently using " + currentAppContext + "]\n" + userMsg;
+    }
+
     g_robot.setThinking(true);
 
     // Run chat in background thread

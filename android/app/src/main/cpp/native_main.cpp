@@ -26,11 +26,11 @@ static std::atomic<bool> g_running(false);
 static std::atomic<bool> g_paused(false);
 static std::thread g_renderThread;
 static JavaVM* g_jvm = nullptr;
-static jobject g_activity = nullptr;
+static jobject g_service = nullptr;
 
 // Helper: call Java method on UI thread
 static void callJavaMethod(const char* methodName, const char* sig, const std::string& arg) {
-    if (!g_jvm || !g_activity) return;
+    if (!g_jvm || !g_service) return;
     JNIEnv* env = nullptr;
     bool attached = false;
     if (g_jvm->GetEnv((void**)&env, JNI_VERSION_1_6) != JNI_OK) {
@@ -39,17 +39,17 @@ static void callJavaMethod(const char* methodName, const char* sig, const std::s
     }
     if (!env) return;
 
-    jclass cls = env->GetObjectClass(g_activity);
+    jclass cls = env->GetObjectClass(g_service);
     if (cls) {
         jmethodID mid = env->GetMethodID(cls, methodName, sig);
         if (mid) {
             if (sig[0] == '(' && sig[1] == 'L') {
                 // String argument
                 jstring jstr = env->NewStringUTF(arg.c_str());
-                env->CallVoidMethod(g_activity, mid, jstr);
+                env->CallVoidMethod(g_service, mid, jstr);
                 env->DeleteLocalRef(jstr);
             } else {
-                env->CallVoidMethod(g_activity, mid);
+                env->CallVoidMethod(g_service, mid);
             }
         }
         env->DeleteLocalRef(cls);
@@ -72,6 +72,10 @@ static void renderLoop() {
     }
 
     g_robot.init(&g_renderer);
+
+    // Enable blending for transparent overlay
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
     auto lastTime = std::chrono::high_resolution_clock::now();
 
@@ -99,8 +103,8 @@ static void renderLoop() {
             callJavaMethod("onBodyTap", "()V", "");
         }
 
-        // Clear and render
-        glClearColor(0.05f, 0.05f, 0.08f, 1.0f);
+        // Clear with transparent — this is an overlay on top of other apps
+        glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
         glClear(GL_COLOR_BUFFER_BIT);
 
         g_robot.render();
@@ -115,14 +119,14 @@ static void renderLoop() {
 extern "C" {
 
 JNIEXPORT void JNICALL
-Java_com_argos_companion_MainActivity_nativeInit(JNIEnv* env, jobject activity, jobject surfaceView) {
+Java_com_argos_companion_FloatingRobotService_nativeInit(JNIEnv* env, jobject service, jobject surfaceView) {
     LOGI("nativeInit");
 
     env->GetJavaVM(&g_jvm);
-    if (g_activity) {
-        env->DeleteGlobalRef(g_activity);
+    if (g_service) {
+        env->DeleteGlobalRef(g_service);
     }
-    g_activity = env->NewGlobalRef(activity);
+    g_service = env->NewGlobalRef(service);
 
     // Stop any existing render thread before starting a new one
     g_running.store(false);
@@ -179,7 +183,7 @@ Java_com_argos_companion_MainActivity_nativeInit(JNIEnv* env, jobject activity, 
 }
 
 JNIEXPORT void JNICALL
-Java_com_argos_companion_MainActivity_nativeSendChat(JNIEnv* env, jobject activity, jstring message) {
+Java_com_argos_companion_FloatingRobotService_nativeSendChat(JNIEnv* env, jobject service, jstring message) {
     const char* msg = env->GetStringUTFChars(message, nullptr);
     std::string userMsg(msg);
     env->ReleaseStringUTFChars(message, msg);
@@ -210,24 +214,24 @@ Java_com_argos_companion_MainActivity_nativeSendChat(JNIEnv* env, jobject activi
 }
 
 JNIEXPORT void JNICALL
-Java_com_argos_companion_MainActivity_nativeResume(JNIEnv* env, jobject activity) {
+Java_com_argos_companion_FloatingRobotService_nativeResume(JNIEnv* env, jobject service) {
     LOGI("nativeResume");
     g_paused.store(false);
 }
 
 JNIEXPORT void JNICALL
-Java_com_argos_companion_MainActivity_nativeOnTouch(JNIEnv* env, jobject activity, jfloat x, jfloat y, jint action) {
+Java_com_argos_companion_FloatingRobotService_nativeOnTouch(JNIEnv* env, jobject service, jfloat x, jfloat y, jint action) {
     g_robot.onTouch(x, y, action);
 }
 
 JNIEXPORT void JNICALL
-Java_com_argos_companion_MainActivity_nativePause(JNIEnv* env, jobject activity) {
+Java_com_argos_companion_FloatingRobotService_nativePause(JNIEnv* env, jobject service) {
     LOGI("nativePause");
     g_paused.store(true);
 }
 
 JNIEXPORT void JNICALL
-Java_com_argos_companion_MainActivity_nativeDestroy(JNIEnv* env, jobject activity) {
+Java_com_argos_companion_FloatingRobotService_nativeDestroy(JNIEnv* env, jobject service) {
     LOGI("nativeDestroy");
     g_running.store(false);
     g_agent.m_abort.store(true);
@@ -237,9 +241,9 @@ Java_com_argos_companion_MainActivity_nativeDestroy(JNIEnv* env, jobject activit
         ANativeWindow_release(g_window);
         g_window = nullptr;
     }
-    if (g_activity) {
-        env->DeleteGlobalRef(g_activity);
-        g_activity = nullptr;
+    if (g_service) {
+        env->DeleteGlobalRef(g_service);
+        g_service = nullptr;
     }
 }
 

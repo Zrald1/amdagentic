@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Spartan helmet shape -->
+    <path
+        android:fillColor="#FFD700"
+        android:pathData="M54,28 L40,34 L40,58 C40,72 48,82 54,84 C60,82 68,72 68,58 L68,34 Z"/>
+    <!-- Helmet crest -->
+    <path
+        android:fillColor="#CC2222"
+        android:pathData="M54,22 L50,28 L54,26 L58,28 Z"/>
+    <!-- Eye sockets (red eyes) -->
+    <path
+        android:fillColor="#FF0000"
+        android:pathData="M46,48 m-3,0 a3,3 0 1,0 6,0 a3,3 0 1,0 -6,0"/>
+    <path
+        android:fillColor="#FF0000"
+        android:pathData="M62,48 m-3,0 a3,3 0 1,0 6,0 a3,3 0 1,0 -6,0"/>
+</vector>

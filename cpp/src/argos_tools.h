@@ -70,6 +70,16 @@ std::string browser_type_active(const std::string& text);
 // Press a keyboard key (enter, tab, escape, etc.)
 std::string browser_press_key(const std::string& key);
 
+// ── Computer Use Tools (direct mouse & keyboard control) ──
+
+std::string mouse_click(int x, int y);
+std::string mouse_right_click(int x, int y);
+std::string mouse_double_click(int x, int y);
+std::string mouse_move(int x, int y);
+std::string keyboard_type(const std::string& text);
+std::string keyboard_key(const std::string& key);
+std::string keyboard_hotkey(const std::string& keys);
+
 // ── Screen Context ──
 
 // List all open application windows

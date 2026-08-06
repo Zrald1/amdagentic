@@ -183,6 +183,11 @@ Java_com_argos_companion_MainActivity_nativeResume(JNIEnv* env, jobject activity
 }
 
 JNIEXPORT void JNICALL
+Java_com_argos_companion_MainActivity_nativeOnTouch(JNIEnv* env, jobject activity, jfloat x, jfloat y, jint action) {
+    g_robot.onTouch(x, y, action);
+}
+
+JNIEXPORT void JNICALL
 Java_com_argos_companion_MainActivity_nativePause(JNIEnv* env, jobject activity) {
     LOGI("nativePause");
     g_paused.store(true);

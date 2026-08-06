@@ -89,6 +89,22 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
         // when the surface is actually created
         surfaceView.getHolder().addCallback(this);
 
+        // Forward touch events to native renderer
+        surfaceView.setOnTouchListener((v, event) -> {
+            float x = event.getX();
+            float y = event.getY();
+            int action = event.getActionMasked();
+            // Map Android action constants: DOWN=0, UP=1, MOVE=2
+            if (action == android.view.MotionEvent.ACTION_DOWN) {
+                nativeOnTouch(x, y, 0);
+            } else if (action == android.view.MotionEvent.ACTION_UP) {
+                nativeOnTouch(x, y, 1);
+            } else if (action == android.view.MotionEvent.ACTION_MOVE) {
+                nativeOnTouch(x, y, 2);
+            }
+            return true;
+        });
+
         sendBtn.setOnClickListener(v -> sendMessage());
         inputEdit.setOnEditorActionListener((v, actionId, event) -> {
             sendMessage();
@@ -207,4 +223,5 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
     private native void nativeResume();
     private native void nativePause();
     private native void nativeDestroy();
+    private native void nativeOnTouch(float x, float y, int action);
 }

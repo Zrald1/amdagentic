@@ -4,9 +4,11 @@
 
 enum class AndroidRobotState {
     Idle,
-    Thinking,
-    Talking,
-    Sleeping
+    Walking,
+    Greeting,
+    Working,
+    Sleeping,
+    Spinning
 };
 
 class RobotGles {
@@ -21,6 +23,7 @@ public:
     void setThinking(bool thinking) { m_thinking = thinking; }
     void setTalking(bool talking) { m_talking = talking; }
     void onTouch(float x, float y, int action);
+    void setSpeechText(const std::string& text) { m_speechText = text; m_speechTime = 0; }
 
 private:
     EglRenderer* m_renderer = nullptr;
@@ -30,14 +33,38 @@ private:
     bool m_talking = false;
     AndroidRobotState m_state = AndroidRobotState::Idle;
     float m_stateTimer = 0.0f;
+    float m_nextBehaviorTime = 3.0f;
     float m_eyeBlinkTimer = 3.0f;
     bool m_blinking = false;
     float m_blinkDuration = 0.0f;
 
-    // Robot position (center of screen, hovering)
+    // Robot position — walks across screen
     float m_cx = 0.0f;
     float m_cy = 0.0f;
     float m_robotSize = 100.0f;
+    float m_targetX = 0.0f;
+    float m_walkSpeed = 150.0f;
+    bool m_facingRight = true;
+
+    // Speech bubble
+    std::string m_speechText;
+    float m_speechTime = 999.0f; // >5 means hidden
+    bool m_speechVisible = false;
+
+    // Spin state
+    float m_spinTimer = 0.0f;
+    float m_spinDuration = 1.0f;
+    bool m_spinWalkLeft = false;
+
+    // Touch state
+    float m_touchStartX = 0;
+    float m_touchStartY = 0;
+    bool m_touchDown = false;
+
+    void setState(AndroidRobotState state, float duration);
+    void pickNextBehavior();
+    void walkToEdge(bool left);
+    void startSpinThenWalk(bool left);
 
     void drawEggBody(float cx, float cy, float bob);
     void drawHead(float cx, float headY, float bob);
@@ -46,6 +73,8 @@ private:
     void drawArm(float cx, float cy, float bob, bool left, float waveAngle);
     void drawGroundShadow(float cx, float baseY, float w);
     void drawSpartanCrest(float cx, float headY);
-    void drawSpeechBubble(float cx, float cy, const std::string& text);
+    void drawSpeechBubble(float cx, float cy);
     void drawThinkingDots(float cx, float cy);
+    void drawSpinningArms(float cx, float cy, float bob, float spinAngle);
+    float computeWalkLean();
 };

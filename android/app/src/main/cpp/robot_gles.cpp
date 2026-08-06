@@ -1,6 +1,7 @@
 #include "robot_gles.h"
 #include <cmath>
 #include <android/log.h>
+#include <cstdlib>
 
 #define TAG "Argos"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, TAG, __VA_ARGS__)
@@ -15,12 +16,54 @@ void RobotGles::init(EglRenderer* renderer) {
         m_cy = renderer->getHeight() / 2.0f;
         m_robotSize = (float)(renderer->getHeight() < renderer->getWidth() ?
                      renderer->getHeight() : renderer->getWidth()) * 0.18f;
+        m_targetX = m_cx;
     }
+}
+
+void RobotGles::setState(AndroidRobotState state, float duration) {
+    m_state = state;
+    m_stateTimer = 0.0f;
+    m_nextBehaviorTime = duration;
+}
+
+void RobotGles::pickNextBehavior() {
+    float roll = (float)rand() / RAND_MAX;
+    if (roll < 0.25f) {
+        setState(AndroidRobotState::Greeting, 1.5f);
+    } else if (roll < 0.55f) {
+        walkToEdge(rand() % 2 == 0);
+    } else {
+        setState(AndroidRobotState::Idle, 4.0f + (float)(rand() % 5));
+    }
+}
+
+void RobotGles::walkToEdge(bool left) {
+    if (!m_renderer) return;
+    float margin = m_robotSize * 1.5f;
+    m_targetX = left ? margin : (float)m_renderer->getWidth() - margin;
+    m_facingRight = !left;
+    setState(AndroidRobotState::Walking, 999.0f);
+}
+
+void RobotGles::startSpinThenWalk(bool left) {
+    m_spinWalkLeft = left;
+    m_spinTimer = 0.0f;
+    float margin = m_robotSize * 1.5f;
+    if (m_renderer) m_targetX = left ? margin : (float)m_renderer->getWidth() - margin;
+    m_facingRight = !left;
+    setState(AndroidRobotState::Spinning, m_spinDuration);
+}
+
+float RobotGles::computeWalkLean() {
+    if (m_state != AndroidRobotState::Walking) return 0.0f;
+    float lean = sinf(m_animTime * 8.0f) * 5.0f;
+    return lean * (m_facingRight ? 1.0f : -1.0f);
 }
 
 void RobotGles::update(float dt) {
     m_animTime += dt;
     m_bob = sinf(m_animTime * 2.0f) * 6.0f;
+    m_stateTimer += dt;
 
     // Eye blink logic
     m_eyeBlinkTimer -= dt;
@@ -34,12 +77,83 @@ void RobotGles::update(float dt) {
         if (m_blinkDuration <= 0) m_blinking = false;
     }
 
-    m_stateTimer += dt;
+    // Speech bubble timer
+    if (m_speechVisible) {
+        m_speechTime += dt;
+        if (m_speechTime > 5.0f) {
+            m_speechVisible = false;
+        }
+    }
+
+    // State machine
+    if (m_state == AndroidRobotState::Spinning) {
+        m_spinTimer += dt;
+        if (m_spinTimer >= m_spinDuration) {
+            setState(AndroidRobotState::Walking, 999.0f);
+        }
+    }
+
+    if (m_state == AndroidRobotState::Walking) {
+        float dx = m_targetX - m_cx;
+        if (fabs(dx) < 3.0f) {
+            m_cx = m_targetX;
+            setState(AndroidRobotState::Idle, 3.0f + (float)(rand() % 5));
+        } else {
+            float step = m_walkSpeed * dt;
+            if (fabs(dx) < step) step = fabs(dx);
+            if (dx > 0) { m_cx += step; m_facingRight = true; }
+            else { m_cx -= step; m_facingRight = false; }
+        }
+    }
+
+    // Pick next behavior when idle timer expires
+    if (m_state != AndroidRobotState::Walking && m_state != AndroidRobotState::Spinning &&
+        m_stateTimer >= m_nextBehaviorTime) {
+        if (m_state == AndroidRobotState::Greeting || m_state == AndroidRobotState::Working) {
+            setState(AndroidRobotState::Idle, 3.0f + (float)(rand() % 5));
+        } else {
+            pickNextBehavior();
+        }
+    }
 }
 
 void RobotGles::onTouch(float x, float y, int action) {
-    // Tap on robot head could trigger chat input focus
-    (void)x; (void)y; (void)action;
+    if (action == 0) { // DOWN
+        m_touchDown = true;
+        m_touchStartX = x;
+        m_touchStartY = y;
+    } else if (action == 1) { // UP
+        m_touchDown = false;
+        float dx = x - m_touchStartX;
+        float dy = y - m_touchStartY;
+        float dist = sqrtf(dx * dx + dy * dy);
+
+        if (dist < 30.0f) { // Tap (not drag)
+            float headY = m_cy - m_robotSize * 0.55f;
+            float headRadius = m_robotSize * 0.35f;
+
+            // Tap on head = speech bubble
+            float dxHead = x - m_cx;
+            float dyHead = y - headY;
+            if (sqrtf(dxHead * dxHead + dyHead * dyHead) < headRadius) {
+                if (m_speechVisible) {
+                    m_speechVisible = false;
+                } else {
+                    m_speechText = "Ask Argos";
+                    m_speechTime = 0;
+                    m_speechVisible = true;
+                }
+                return;
+            }
+
+            // Tap on body = spin then walk
+            float dxBody = x - m_cx;
+            float dyBody = y - m_cy;
+            if (sqrtf(dxBody * dxBody + dyBody * dyBody) < m_robotSize * 0.5f) {
+                startSpinThenWalk(x < m_cx);
+            }
+        }
+    }
 }
 
 void RobotGles::render() {
@@ -55,13 +169,19 @@ void RobotGles::render() {
     // Hover glow
     drawHoverGlow(cx, cy + s * 0.8f);
 
-    // Egg body (white, glossy)
+    // Egg body (golden armor)
     drawEggBody(cx, cy, m_bob);
 
-    // Arms
-    float waveAngle = sinf(m_animTime * 3.0f) * 0.3f;
-    drawArm(cx, cy, m_bob, true, waveAngle);
-    drawArm(cx, cy, m_bob, false, -waveAngle);
+    // Arms or spinning arms
+    if (m_state == AndroidRobotState::Spinning) {
+        float spinAngle = m_spinTimer * 6.28f * 2.0f;
+        drawSpinningArms(cx, cy, m_bob, spinAngle);
+    } else {
+        float waveAngle = sinf(m_animTime * 3.0f) * 0.3f;
+        if (m_state == AndroidRobotState::Greeting) waveAngle = sinf(m_animTime * 6.0f) * 0.6f;
+        drawArm(cx, cy, m_bob, true, waveAngle);
+        drawArm(cx, cy, m_bob, false, -waveAngle);
+    }
 
     // Head with Spartan helmet
     float headY = cy - s * 0.55f;
@@ -74,36 +194,41 @@ void RobotGles::render() {
     if (m_thinking) {
         drawThinkingDots(cx, headY - s * 0.5f);
     }
+
+    // Speech bubble (drawn on top of everything)
+    if (m_speechVisible) {
+        drawSpeechBubble(cx, headY - s * 0.8f);
+    }
 }
 
 void RobotGles::drawEggBody(float cx, float cy, float bob) {
     if (!m_renderer) return;
     float s = m_robotSize;
-    // Main body — white egg shape (approximate with circles)
-    m_renderer->drawCircle(cx, cy, s * 0.5f, 0.92f, 0.92f, 0.95f, 1.0f, 48);
-    // Highlight (lighter, upper-left)
-    m_renderer->drawCircle(cx - s * 0.15f, cy - s * 0.15f, s * 0.25f, 1.0f, 1.0f, 1.0f, 0.4f, 32);
-    // Shadow (lower-right)
-    m_renderer->drawCircle(cx + s * 0.15f, cy + s * 0.2f, s * 0.3f, 0.75f, 0.75f, 0.78f, 0.3f, 32);
+    // Main body — golden egg shape (Spartan armor gold)
+    m_renderer->drawCircle(cx, cy, s * 0.5f, 0.85f, 0.7f, 0.2f, 1.0f, 48);
+    // Highlight (lighter gold, upper-left)
+    m_renderer->drawCircle(cx - s * 0.15f, cy - s * 0.15f, s * 0.25f, 1.0f, 0.9f, 0.4f, 0.4f, 32);
+    // Shadow (darker gold, lower-right)
+    m_renderer->drawCircle(cx + s * 0.15f, cy + s * 0.2f, s * 0.3f, 0.6f, 0.5f, 0.15f, 0.3f, 32);
 }
 
 void RobotGles::drawHead(float cx, float headY, float bob) {
     if (!m_renderer) return;
     float s = m_robotSize;
 
-    // Head — slightly smaller egg, dark face screen
-    m_renderer->drawCircle(cx, headY, s * 0.35f, 0.92f, 0.92f, 0.95f, 1.0f, 48);
+    // Head — golden helmet
+    m_renderer->drawCircle(cx, headY, s * 0.35f, 0.85f, 0.7f, 0.2f, 1.0f, 48);
 
     // Face screen (black, rounded)
     m_renderer->drawRoundRect(cx - s * 0.22f, headY - s * 0.15f,
                               s * 0.44f, s * 0.3f, s * 0.08f,
                               0.05f, 0.05f, 0.08f, 1.0f);
 
-    // Eyes — neon red (Spartan helmet red eyes)
+    // Eyes — neon green (Spartan serious gaze)
     float eyeY = headY - s * 0.02f;
     float eyeSpacing = s * 0.1f;
     float eyeW = s * 0.06f;
-    float eyeH = m_blinking ? s * 0.01f : s * 0.08f;
+    float eyeH = m_blinking ? s * 0.01f : s * 0.04f;
 
     drawEye(cx - eyeSpacing, eyeY, eyeW, eyeH, m_thinking);
     drawEye(cx + eyeSpacing, eyeY, eyeW, eyeH, m_thinking);
@@ -112,14 +237,14 @@ void RobotGles::drawHead(float cx, float headY, float bob) {
 void RobotGles::drawEye(float ex, float ey, float w, float h, bool thinking) {
     if (!m_renderer) return;
 
-    // Red neon eye (Spartan red)
-    float r = 1.0f, g = 0.15f, b = 0.15f;
-    if (thinking) { r = 0.2f; g = 0.6f; b = 1.0f; } // Blue when thinking
+    // Green neon eye (Spartan green gaze) — blue when thinking
+    float r = 0.1f, g = 0.9f, b = 0.2f;
+    if (thinking) { r = 0.2f; g = 0.6f; b = 1.0f; }
 
     // Glow
     m_renderer->drawCircle(ex, ey, w * 1.8f, r * 0.3f, g * 0.3f, b * 0.3f, 0.4f, 24);
-    // Eye
-    m_renderer->drawCircle(ex, ey, w, r, g, b, 1.0f, 24);
+    // Eye — flat horizontal slit (serious gaze)
+    m_renderer->drawRect(ex - w, ey - h * 0.5f, w * 2.0f, h, r, g, b, 1.0f);
     // Spark (white center)
     if (!m_blinking) {
         m_renderer->drawCircle(ex - w * 0.2f, ey - h * 0.2f, w * 0.3f, 1.0f, 1.0f, 1.0f, 0.8f, 16);
@@ -129,7 +254,6 @@ void RobotGles::drawEye(float ex, float ey, float w, float h, bool thinking) {
 void RobotGles::drawHoverGlow(float cx, float baseY) {
     if (!m_renderer) return;
     float s = m_robotSize;
-    // Blue glow under robot
     for (int i = 0; i < 3; i++) {
         float alpha = 0.15f - i * 0.04f;
         m_renderer->drawCircle(cx, baseY, s * (0.4f + i * 0.15f), 0.0f, 0.5f, 1.0f, alpha, 32);
@@ -141,8 +265,7 @@ void RobotGles::drawArm(float cx, float cy, float bob, bool left, float waveAngl
     float s = m_robotSize;
     float armX = left ? cx - s * 0.45f : cx + s * 0.45f;
     float armY = cy + sinf(m_animTime * 2.0f + (left ? 0 : 3.14f)) * 4.0f + waveAngle * 10.0f;
-    // Arm — small white circle
-    m_renderer->drawCircle(armX, armY, s * 0.12f, 0.92f, 0.92f, 0.95f, 1.0f, 24);
+    m_renderer->drawCircle(armX, armY, s * 0.12f, 0.85f, 0.7f, 0.2f, 1.0f, 24);
 }
 
 void RobotGles::drawGroundShadow(float cx, float baseY, float w) {
@@ -153,11 +276,8 @@ void RobotGles::drawGroundShadow(float cx, float baseY, float w) {
 void RobotGles::drawSpartanCrest(float cx, float headY) {
     if (!m_renderer) return;
     float s = m_robotSize;
-    // Golden Spartan helmet crest on top of head
-    // Center ridge
     m_renderer->drawRect(cx - s * 0.03f, headY - s * 0.2f, s * 0.06f, s * 0.2f,
                          0.85f, 0.7f, 0.2f, 1.0f);
-    // Crest feathers (red)
     for (int i = 0; i < 5; i++) {
         float fx = cx - s * 0.08f + i * s * 0.04f;
         float fy = headY - s * 0.25f - sinf(m_animTime * 2.0f + i * 0.5f) * 2.0f;
@@ -173,5 +293,89 @@ void RobotGles::drawThinkingDots(float cx, float cy) {
         float alpha = (i == phase) ? 1.0f : 0.3f;
         float dx = cx - s * 0.1f + i * s * 0.1f;
         m_renderer->drawCircle(dx, cy, s * 0.04f, 0.2f, 0.6f, 1.0f, alpha, 16);
+    }
+}
+
+void RobotGles::drawSpinningArms(float cx, float cy, float bob, float spinAngle) {
+    if (!m_renderer) return;
+    float s = m_robotSize;
+    float orbitR = s * 0.42f;
+    for (int i = 0; i < 2; i++) {
+        float angle = spinAngle + i * 3.14159f;
+        float ax = cx + cosf(angle) * orbitR;
+        float ay = cy + sinf(angle) * orbitR * 0.6f;
+        m_renderer->drawCircle(ax, ay, s * 0.1f, 0.85f, 0.7f, 0.2f, 1.0f, 24);
+    }
+}
+
+void RobotGles::drawSpeechBubble(float cx, float cy) {
+    if (!m_renderer) return;
+    float s = m_robotSize;
+
+    float bw = s * 2.2f;
+    float bh = s * 1.0f;
+
+    // Pop-in animation
+    float scale = 1.0f;
+    if (m_speechTime < 0.2f) {
+        scale = m_speechTime / 0.2f;
+        if (scale < 0.1f) scale = 0.1f;
+    }
+    float actualW = bw * scale;
+    float actualH = bh * scale;
+    float actualX = cx - actualW / 2.0f;
+    float actualY = cy - actualH;
+
+    // Clamp to screen
+    if (actualX < 5.0f) actualX = 5.0f;
+    if (actualX + actualW > m_renderer->getWidth() - 5.0f)
+        actualX = m_renderer->getWidth() - actualW - 5.0f;
+    if (actualY < 5.0f) actualY = 5.0f;
+
+    // Glow halo (neon blue)
+    for (int i = 0; i < 3; i++) {
+        float expand = (float)(i + 1) * 4.0f;
+        float alpha = 0.15f - i * 0.04f;
+        m_renderer->drawRoundRect(actualX - expand, actualY - expand,
+                                  actualW + expand * 2, actualH + expand * 2,
+                                  s * 0.1f + expand, 0.0f, 0.8f, 1.0f, alpha);
+    }
+
+    // White background
+    m_renderer->drawRoundRect(actualX, actualY, actualW, actualH, s * 0.1f,
+                              1.0f, 1.0f, 1.0f, 0.95f);
+
+    // Neon blue border
+    m_renderer->drawRoundRect(actualX, actualY, actualW, actualH, s * 0.1f,
+                              0.0f, 0.8f, 1.0f, 1.0f);
+
+    // Accent header bar
+    m_renderer->drawRoundRect(actualX + 8, actualY + 8, actualW - 16, s * 0.12f, s * 0.04f,
+                              0.0f, 0.8f, 1.0f, 0.8f);
+
+    // Tail (triangle pointing down at robot)
+    float tailW = s * 0.2f;
+    float tailH = s * 0.15f;
+    float tailX = cx;
+    float tailTopY = actualY + actualH;
+    m_renderer->drawTriangle(
+        tailX - tailW / 2, tailTopY,
+        tailX + tailW / 2, tailTopY,
+        tailX, tailTopY + tailH,
+        1.0f, 1.0f, 1.0f, 0.95f
+    );
+
+    // Text lines (GLES has no text rendering — draw as small bars)
+    if (scale > 0.5f) {
+        float lineY = actualY + s * 0.3f;
+        float lineH = s * 0.04f;
+        float lineSpacing = s * 0.12f;
+        float lineStart = actualX + s * 0.15f;
+        float lineWidths[] = {actualW * 0.6f, actualW * 0.7f, actualW * 0.4f};
+        for (int i = 0; i < 3; i++) {
+            m_renderer->drawRect(lineStart, lineY + i * lineSpacing,
+                                 lineWidths[i], lineH,
+                                 0.2f, 0.2f, 0.2f, 0.8f);
+        }
     }
 }

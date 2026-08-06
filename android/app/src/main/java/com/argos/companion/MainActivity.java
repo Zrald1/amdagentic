@@ -37,10 +37,24 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
 
         // Full-screen SurfaceView — robot walks here
         surfaceView = new SurfaceView(this);
-        setContentView(surfaceView);
 
         // Speech bubble overlay — hidden by default, shown when head is tapped
-        createSpeechBubble();
+        bubbleOverlay = createSpeechBubble();
+
+        // Root layout containing robot + bubble overlay
+        android.widget.FrameLayout root = new android.widget.FrameLayout(this);
+        root.setBackgroundColor(Color.BLACK);
+        root.addView(surfaceView, new android.widget.FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        // Position bubble in upper portion of screen
+        android.widget.FrameLayout.LayoutParams bubbleParams = new android.widget.FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        bubbleParams.gravity = Gravity.TOP;
+        bubbleParams.setMargins(40, 60, 40, 0);
+        root.addView(bubbleOverlay, bubbleParams);
+
+        setContentView(root);
 
         // Register for surface callbacks — nativeInit will be called
         // when the surface is actually created
@@ -62,12 +76,12 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
         });
     }
 
-    private void createSpeechBubble() {
-        bubbleOverlay = new LinearLayout(this);
-        bubbleOverlay.setOrientation(LinearLayout.VERTICAL);
-        bubbleOverlay.setBackgroundColor(Color.rgb(25, 25, 30));
-        bubbleOverlay.setPadding(28, 24, 28, 24);
-        bubbleOverlay.setVisibility(View.GONE);
+    private LinearLayout createSpeechBubble() {
+        LinearLayout bubble = new LinearLayout(this);
+        bubble.setOrientation(LinearLayout.VERTICAL);
+        bubble.setBackgroundColor(Color.rgb(25, 25, 30));
+        bubble.setPadding(28, 24, 28, 24);
+        bubble.setVisibility(View.GONE);
 
         // Title bar — "Ask Argos" in neon blue
         TextView title = new TextView(this);
@@ -76,7 +90,7 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
         title.setTextSize(20f);
         title.setPadding(0, 0, 0, 16);
         title.setGravity(Gravity.CENTER);
-        bubbleOverlay.addView(title);
+        bubble.addView(title);
 
         // Neon blue divider
         View divider = new View(this);
@@ -84,7 +98,7 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
         LinearLayout.LayoutParams divParams = new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, 3);
         divParams.bottomMargin = 16;
-        bubbleOverlay.addView(divider, divParams);
+        bubble.addView(divider, divParams);
 
         // Conversation scroll area
         convoScroll = new ScrollView(this);
@@ -95,7 +109,7 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
         convoLayout.setOrientation(LinearLayout.VERTICAL);
         convoLayout.setPadding(20, 20, 20, 20);
         convoScroll.addView(convoLayout);
-        bubbleOverlay.addView(convoScroll, scrollParams);
+        bubble.addView(convoScroll, scrollParams);
 
         // Input bar
         LinearLayout inputBar = new LinearLayout(this);
@@ -105,7 +119,7 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
         LinearLayout.LayoutParams inputBarParams = new LinearLayout.LayoutParams(
             ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         inputBarParams.topMargin = 12;
-        bubbleOverlay.addView(inputBar, inputBarParams);
+        bubble.addView(inputBar, inputBarParams);
 
         inputEdit = new EditText(this);
         inputEdit.setHint("Message Argos...");
@@ -132,19 +146,7 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
             return true;
         });
 
-        // Add bubble as overlay on top of SurfaceView
-        android.widget.FrameLayout root = new android.widget.FrameLayout(this);
-        root.addView(surfaceView, new android.widget.FrameLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
-
-        // Position bubble in upper portion of screen
-        android.widget.FrameLayout.LayoutParams bubbleParams = new android.widget.FrameLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        bubbleParams.gravity = Gravity.TOP;
-        bubbleParams.setMargins(40, 60, 40, 0);
-        root.addView(bubbleOverlay, bubbleParams);
-
-        setContentView(root);
+        return bubble;
     }
 
     // Called from C++ via JNI when robot head is tapped

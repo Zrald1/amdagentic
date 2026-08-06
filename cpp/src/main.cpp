@@ -46,6 +46,10 @@ static WindowManager* g_windowMgr = nullptr;
 static HWND g_bubbleHwnd = nullptr;
 static void ShowMangaBubble(HINSTANCE hInstance, HWND parent);
 
+// True when the speech bubble is below the robot (robot at top of screen)
+// In this case, the tail should point UP toward the robot instead of down
+static bool g_bubbleBelowRobot = false;
+
 // ── Voice / Whisper state ──
 static bool g_whisperAutoInitTried = false;
 static bool g_voiceRecording = false;
@@ -935,12 +939,23 @@ static LRESULT CALLBACK BubbleWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             // ── 2. Tail fill (dark, behind bubble) ──
             SelectObject(memDC, nullPen);
             SelectObject(memDC, darkBrush);
-            POINT tail[] = {
-                {tailX - tailW, bB - 2},
-                {tailX + tailW, bB - 2},
-                {tailX, bB + tailH}
-            };
-            Polygon(memDC, tail, 3);
+            if (g_bubbleBelowRobot) {
+                // Tail points UP toward robot above
+                POINT tailUp[] = {
+                    {tailX - tailW, bT + 2},
+                    {tailX + tailW, bT + 2},
+                    {tailX, bT - tailH}
+                };
+                Polygon(memDC, tailUp, 3);
+            } else {
+                // Tail points DOWN toward robot below
+                POINT tail[] = {
+                    {tailX - tailW, bB - 2},
+                    {tailX + tailW, bB - 2},
+                    {tailX, bB + tailH}
+                };
+                Polygon(memDC, tail, 3);
+            }
 
             // ── 3. Dark bubble body ──
             RoundRect(memDC, bL, bT, bR, bB, radius * 2, radius * 2);
@@ -971,25 +986,42 @@ static LRESULT CALLBACK BubbleWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             SelectObject(memDC, GetStockObject(NULL_BRUSH));
             RoundRect(memDC, bL, bT, bR, bB, radius * 2, radius * 2);
 
-            // ── 7. Erase bottom outline where tail connects ──
+            // ── 7. Erase outline where tail connects ──
             SelectObject(memDC, nullPen);
             SelectObject(memDC, darkBrush);
-            RECT eraseRect = {tailX - tailW, bB - 2, tailX + tailW, bB + 2};
-            FillRect(memDC, &eraseRect, darkBrush);
+            if (g_bubbleBelowRobot) {
+                RECT eraseRect = {tailX - tailW, bT - 2, tailX + tailW, bT + 2};
+                FillRect(memDC, &eraseRect, darkBrush);
+            } else {
+                RECT eraseRect = {tailX - tailW, bB - 2, tailX + tailW, bB + 2};
+                FillRect(memDC, &eraseRect, darkBrush);
+            }
 
             // ── 8. Tail outline ──
             SelectObject(memDC, neonPen);
             SelectObject(memDC, GetStockObject(NULL_BRUSH));
-            MoveToEx(memDC, tailX - tailW, bB, nullptr);
-            LineTo(memDC, tailX, bB + tailH);
-            LineTo(memDC, tailX + tailW, bB);
+            if (g_bubbleBelowRobot) {
+                MoveToEx(memDC, tailX - tailW, bT, nullptr);
+                LineTo(memDC, tailX, bT - tailH);
+                LineTo(memDC, tailX + tailW, bT);
+            } else {
+                MoveToEx(memDC, tailX - tailW, bB, nullptr);
+                LineTo(memDC, tailX, bB + tailH);
+                LineTo(memDC, tailX + tailW, bB);
+            }
 
             // ── 9. Tail glow ──
             HPEN glowPen = CreatePen(PS_SOLID, 2, NEON_BLUE_DIM);
             SelectObject(memDC, glowPen);
-            MoveToEx(memDC, tailX - tailW - 2, bB, nullptr);
-            LineTo(memDC, tailX, bB + tailH + 2);
-            LineTo(memDC, tailX + tailW + 2, bB);
+            if (g_bubbleBelowRobot) {
+                MoveToEx(memDC, tailX - tailW - 2, bT, nullptr);
+                LineTo(memDC, tailX, bT - tailH - 2);
+                LineTo(memDC, tailX + tailW + 2, bT);
+            } else {
+                MoveToEx(memDC, tailX - tailW - 2, bB, nullptr);
+                LineTo(memDC, tailX, bB + tailH + 2);
+                LineTo(memDC, tailX + tailW + 2, bB);
+            }
 
             SelectObject(memDC, nullPen);
             DeleteObject(neonPen);
@@ -1515,6 +1547,11 @@ static LRESULT CALLBACK ProactiveBubbleProc(HWND hwnd, UINT msg, WPARAM wParam, 
             // Bubble geometry — reserve space at bottom for tail
             int tailH = 22;
             int bL = 8, bT = 8, bR = w - 8, bB = h - tailH - 4;
+            if (g_bubbleBelowRobot) {
+                // Reserve space at top for tail pointing up
+                bT = tailH + 4;
+                bB = h - 8;
+            }
             int radius = 18;
             int tailX = w / 2;
             int tailW = 12;
@@ -1534,12 +1571,21 @@ static LRESULT CALLBACK ProactiveBubbleProc(HWND hwnd, UINT msg, WPARAM wParam, 
             // Tail fill
             SelectObject(memDC, nullPen);
             SelectObject(memDC, whiteBrush);
-            POINT tail[] = {
-                {tailX - tailW, bB - 2},
-                {tailX + tailW, bB - 2},
-                {tailX, bB + tailH}
-            };
-            Polygon(memDC, tail, 3);
+            if (g_bubbleBelowRobot) {
+                POINT tailUp[] = {
+                    {tailX - tailW, bT + 2},
+                    {tailX + tailW, bT + 2},
+                    {tailX, bT - tailH}
+                };
+                Polygon(memDC, tailUp, 3);
+            } else {
+                POINT tail[] = {
+                    {tailX - tailW, bB - 2},
+                    {tailX + tailW, bB - 2},
+                    {tailX, bB + tailH}
+                };
+                Polygon(memDC, tail, 3);
+            }
 
             // White bubble body
             RoundRect(memDC, bL, bT, bR, bB, radius * 2, radius * 2);
@@ -1557,18 +1603,29 @@ static LRESULT CALLBACK ProactiveBubbleProc(HWND hwnd, UINT msg, WPARAM wParam, 
             SelectObject(memDC, GetStockObject(NULL_BRUSH));
             RoundRect(memDC, bL, bT, bR, bB, radius * 2, radius * 2);
 
-            // Erase bottom outline where tail connects
+            // Erase outline where tail connects
             SelectObject(memDC, nullPen);
             SelectObject(memDC, whiteBrush);
-            RECT eraseRect = {tailX - tailW, bB - 2, tailX + tailW, bB + 2};
-            FillRect(memDC, &eraseRect, whiteBrush);
+            if (g_bubbleBelowRobot) {
+                RECT eraseRect = {tailX - tailW, bT - 2, tailX + tailW, bT + 2};
+                FillRect(memDC, &eraseRect, whiteBrush);
+            } else {
+                RECT eraseRect = {tailX - tailW, bB - 2, tailX + tailW, bB + 2};
+                FillRect(memDC, &eraseRect, whiteBrush);
+            }
 
             // Tail outline
             SelectObject(memDC, neonPen);
             SelectObject(memDC, GetStockObject(NULL_BRUSH));
-            MoveToEx(memDC, tailX - tailW, bB, nullptr);
-            LineTo(memDC, tailX, bB + tailH);
-            LineTo(memDC, tailX + tailW, bB);
+            if (g_bubbleBelowRobot) {
+                MoveToEx(memDC, tailX - tailW, bT, nullptr);
+                LineTo(memDC, tailX, bT - tailH);
+                LineTo(memDC, tailX + tailW, bT);
+            } else {
+                MoveToEx(memDC, tailX - tailW, bB, nullptr);
+                LineTo(memDC, tailX, bB + tailH);
+                LineTo(memDC, tailX + tailW, bB);
+            }
 
             // Draw the message text — LARGE bold font for manga-style readability
             HFONT msgFont = CreateFontW(24, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
@@ -1752,7 +1809,12 @@ static void ShowProactiveBubble(HWND robotHwnd, const std::wstring& message) {
     int screenH = GetSystemMetrics(SM_CYSCREEN);
     int x = rc.left + (rc.right - rc.left) / 2 - bubbleW / 2;
     int y = rc.top - bubbleH + 10;
-    if (y < 0) y = rc.bottom + 10;
+    if (y < 0) {
+        y = rc.bottom + 10;
+        g_bubbleBelowRobot = true;
+    } else {
+        g_bubbleBelowRobot = false;
+    }
     // Clamp X to keep entire bubble visible on screen
     if (x < 4) x = 4;
     if (x + bubbleW > screenW - 4) x = screenW - bubbleW - 4;
@@ -1806,12 +1868,22 @@ static void UpdateBubblePosition(HWND robotHwnd) {
     int screenW = GetSystemMetrics(SM_CXSCREEN);
     int x = rc.left + (rc.right - rc.left) / 2 - bubbleW / 2;
     int y = rc.top - bubbleH + 15;
-    if (y < 0) y = rc.bottom + 10;
+    bool wasBelow = g_bubbleBelowRobot;
+    if (y < 0) {
+        y = rc.bottom + 10;
+        g_bubbleBelowRobot = true;
+    } else {
+        g_bubbleBelowRobot = false;
+    }
     // Clamp X to keep entire bubble visible on screen
     if (x < 4) x = 4;
     if (x + bubbleW > screenW - 4) x = screenW - bubbleW - 4;
     SetWindowPos(g_bubbleHwnd, HWND_TOPMOST, x, y, bubbleW, bubbleH,
                  SWP_NOACTIVATE | SWP_SHOWWINDOW);
+    // Repaint if tail direction changed
+    if (wasBelow != g_bubbleBelowRobot) {
+        InvalidateRect(g_bubbleHwnd, nullptr, TRUE);
+    }
 }
 
 static void ShowMangaBubble(HINSTANCE hInstance, HWND parent) {
@@ -1839,7 +1911,12 @@ static void ShowMangaBubble(HINSTANCE hInstance, HWND parent) {
     int bubbleW = 340, bubbleH = 280;
     int x = rc.left + (rc.right - rc.left) / 2 - bubbleW / 2;
     int y = rc.top - bubbleH + 15; // tail overlaps robot slightly
-    if (y < 0) y = rc.bottom + 10;
+    if (y < 0) {
+        y = rc.bottom + 10;
+        g_bubbleBelowRobot = true;
+    } else {
+        g_bubbleBelowRobot = false;
+    }
     // Clamp X to keep entire bubble visible on screen
     if (x < 4) x = 4;
     if (x + bubbleW > screenW - 4) x = screenW - bubbleW - 4;
@@ -1901,7 +1978,13 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                     int screenH2 = GetSystemMetrics(SM_CYSCREEN);
                     int x = rc.left + (rc.right - rc.left) / 2 - bw / 2;
                     int y = rc.top - bh + 10;
-                    if (y < 0) y = rc.bottom + 10;
+                    bool wasBelow = g_bubbleBelowRobot;
+                    if (y < 0) {
+                        y = rc.bottom + 10;
+                        g_bubbleBelowRobot = true;
+                    } else {
+                        g_bubbleBelowRobot = false;
+                    }
                     // Clamp X to screen edges
                     if (x < 4) x = 4;
                     if (x + bw > screenW2 - 4) x = screenW2 - bw - 4;
@@ -1910,6 +1993,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                     if (y < 4) y = 4;
                     SetWindowPos(g_proactiveBubble, HWND_TOPMOST, x, y, 0, 0,
                                  SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+                    // Repaint if tail direction changed
+                    if (wasBelow != g_bubbleBelowRobot) {
+                        InvalidateRect(g_proactiveBubble, nullptr, TRUE);
+                    }
                 }
 
                 // Check if head was clicked → show input dialog

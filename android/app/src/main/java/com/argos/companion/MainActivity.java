@@ -9,9 +9,14 @@ import android.os.Bundle;
 import android.provider.Settings;
 import android.widget.LinearLayout;
 import android.widget.TextView;
+import android.widget.Button;
 import android.graphics.Color;
 import android.view.Gravity;
 import android.view.ViewGroup;
+import android.accessibilityservice.AccessibilityServiceInfo;
+import android.content.pm.ServiceInfo;
+import android.view.accessibility.AccessibilityManager;
+import java.util.List;
 
 public class MainActivity extends Activity {
 
@@ -92,12 +97,26 @@ public class MainActivity extends Activity {
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode == OVERLAY_PERMISSION_REQUEST_CODE) {
             if (hasOverlayPermission()) {
-                startFloatingService();
-                finish();
+                if (!isAccessibilityEnabled()) {
+                    promptAccessibility();
+                } else {
+                    startFloatingService();
+                    finish();
+                }
             } else {
-                // Permission not granted — show again
                 requestOverlayPermission();
             }
+        }
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        // If overlay permission is granted and accessibility is enabled, start service
+        // This handles the case where user returns from accessibility settings
+        if (hasOverlayPermission() && isAccessibilityEnabled()) {
+            startFloatingService();
+            finish();
         }
     }
 
@@ -108,6 +127,71 @@ public class MainActivity extends Activity {
         } else {
             startService(intent);
         }
+    }
+
+    private boolean isAccessibilityEnabled() {
+        AccessibilityManager am = (AccessibilityManager) getSystemService(ACCESSIBILITY_SERVICE);
+        if (am == null) return false;
+        List<AccessibilityServiceInfo> enabled = am.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_GENERIC);
+        if (enabled == null) return false;
+        for (AccessibilityServiceInfo info : enabled) {
+            String id = info.getId();
+            if (id != null && id.contains(getPackageName())) return true;
+        }
+        return false;
+    }
+
+    private void promptAccessibility() {
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        root.setBackgroundColor(Color.rgb(15, 15, 20));
+        root.setGravity(Gravity.CENTER);
+        root.setPadding(48, 48, 48, 48);
+
+        TextView title = new TextView(this);
+        title.setText("Argos needs Accessibility");
+        title.setTextColor(Color.rgb(0, 200, 255));
+        title.setTextSize(22f);
+        title.setGravity(Gravity.CENTER);
+        title.setPadding(0, 0, 0, 24);
+        root.addView(title);
+
+        TextView desc = new TextView(this);
+        desc.setText("Argos can read browser content, click links, type text, and scroll pages on your behalf. Enable the Argos accessibility service to use these features.\n\nYou can skip this if you only want basic chat.");
+        desc.setTextColor(Color.rgb(200, 200, 210));
+        desc.setTextSize(16f);
+        desc.setGravity(Gravity.CENTER);
+        desc.setPadding(0, 0, 0, 32);
+        root.addView(desc);
+
+        Button enableBtn = new Button(this);
+        enableBtn.setText("Enable Accessibility");
+        enableBtn.setTextColor(Color.WHITE);
+        enableBtn.setBackgroundColor(Color.rgb(0, 120, 215));
+        enableBtn.setPadding(48, 32, 48, 32);
+        LinearLayout.LayoutParams enableParams = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        enableParams.bottomMargin = 16;
+        root.addView(enableBtn, enableParams);
+
+        enableBtn.setOnClickListener(v -> {
+            Intent intent = new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS);
+            startActivity(intent);
+        });
+
+        Button skipBtn = new Button(this);
+        skipBtn.setText("Skip — Basic Chat Only");
+        skipBtn.setTextColor(Color.rgb(150, 150, 160));
+        skipBtn.setBackgroundColor(Color.TRANSPARENT);
+        skipBtn.setPadding(48, 16, 48, 16);
+        root.addView(skipBtn);
+
+        skipBtn.setOnClickListener(v -> {
+            startFloatingService();
+            finish();
+        });
+
+        setContentView(root);
     }
 }
 

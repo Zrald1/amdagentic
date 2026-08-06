@@ -552,6 +552,45 @@ public class FloatingRobotService extends Service implements SurfaceHolder.Callb
         return instance;
     }
 
+    // ── Browser / Screen interaction via Accessibility Service ──
+    // Called from C++ via JNI to interact with the user's browser and screen
+
+    public String openUrlJava(String url) {
+        ArgosAccessibilityService svc = ArgosAccessibilityService.getInstance();
+        if (svc == null) return "{\"error\":\"Accessibility service not enabled. Please enable Argos in Accessibility Settings.\"}";
+        return svc.openUrl(url);
+    }
+
+    public String getScreenTextJava() {
+        ArgosAccessibilityService svc = ArgosAccessibilityService.getInstance();
+        if (svc == null) return "{\"error\":\"Accessibility service not enabled. Please enable Argos in Accessibility Settings.\"}";
+        return svc.getScreenText();
+    }
+
+    public String getActiveAppJava() {
+        ArgosAccessibilityService svc = ArgosAccessibilityService.getInstance();
+        if (svc == null) return "{\"error\":\"Accessibility service not enabled.\"}";
+        return svc.getActiveApp();
+    }
+
+    public String clickTextJava(String text) {
+        ArgosAccessibilityService svc = ArgosAccessibilityService.getInstance();
+        if (svc == null) return "{\"error\":\"Accessibility service not enabled.\"}";
+        return svc.clickText(text);
+    }
+
+    public String typeTextJava(String text) {
+        ArgosAccessibilityService svc = ArgosAccessibilityService.getInstance();
+        if (svc == null) return "{\"error\":\"Accessibility service not enabled.\"}";
+        return svc.typeText(text);
+    }
+
+    public String scrollScreenJava(int direction) {
+        ArgosAccessibilityService svc = ArgosAccessibilityService.getInstance();
+        if (svc == null) return "{\"error\":\"Accessibility service not enabled.\"}";
+        return svc.scrollScreen(direction);
+    }
+
     // Called from C++ via JNI to perform HTTP POST (handles HTTPS automatically)
     public String httpPostJava(String url, String headers, String body, boolean stream) {
         try {

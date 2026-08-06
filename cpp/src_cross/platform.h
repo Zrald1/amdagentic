@@ -27,6 +27,28 @@ void log(const char* message);
 // Set JNI environment for HTTP requests (Android only — uses Java HttpURLConnection for HTTPS)
 void setJniForHttp(void* jvm, void* service);
 
+// ── Browser / Screen interaction (platform-specific) ──
+// On Android these use Accessibility Service via JNI.
+// On other platforms they may be stubs.
+
+// Open a URL in the device's default browser
+std::string openUrl(const std::string& url);
+
+// Get all text content currently visible on screen (any app, including browser)
+std::string getScreenText();
+
+// Get the package name of the currently focused app
+std::string getActiveApp();
+
+// Click on the first element containing the given text
+std::string clickText(const std::string& text);
+
+// Type text into the currently focused input field
+std::string typeText(const std::string& text);
+
+// Scroll the current screen: direction 0=up, 1=down
+std::string scrollScreen(int direction);
+
 // Get current time in milliseconds
 int64_t getTimeMs();
 

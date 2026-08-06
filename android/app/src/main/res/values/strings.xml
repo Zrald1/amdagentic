@@ -1,3 +1,4 @@
 <resources>
     <string name="app_name">Argos</string>
+    <string name="accessibility_service_description">Argos uses accessibility to read screen content, interact with browser pages, and help you navigate your device. This allows Argos to see text on screen, click links, type text, and scroll pages on your behalf.</string>
 </resources>

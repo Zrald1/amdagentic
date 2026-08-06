@@ -6,6 +6,8 @@
 #include <sys/stat.h>
 #include <cstdio>
 #include <cstring>
+#include <chrono>
+#include <thread>
 
 #ifdef __ANDROID__
 #include <android/log.h>
@@ -146,13 +148,40 @@ std::string dispatch_tool(const std::string& tool_name, const std::string& args)
         return tool_forget();
     }
     if (name == "search") {
-        return "{\"error\":\"Web search not available on mobile platform. Use list_files, read, or cmd tools instead.\"}";
+        return "{\"error\":\"Web search not available on mobile platform. Use open_url to open a search page, then screen_text to read it.\"}";
     }
     if (name == "rag_search" || name == "search_files" || name == "search_filename") {
         return "{\"error\":\"RAG search not available on this platform\"}";
     }
-    if (name == "screen_apps" || name == "screen_active") {
-        return "{\"error\":\"Screen context not available on this platform\"}";
+    // ── Browser / Screen tools (Android Accessibility Service) ──
+    if (name == "open_url" || name == "browser_open" || name == "navigate") {
+        std::string result = argos::openUrl(args);
+        // Wait for browser to load
+        std::this_thread::sleep_for(std::chrono::seconds(2));
+        return result;
+    }
+    if (name == "screen_text" || name == "read_screen" || name == "browser_content") {
+        return argos::getScreenText();
+    }
+    if (name == "screen_active" || name == "active_app") {
+        return argos::getActiveApp();
+    }
+    if (name == "click_text" || name == "browser_click") {
+        std::string result = argos::clickText(args);
+        // Wait for screen to update after click
+        std::this_thread::sleep_for(std::chrono::seconds(1));
+        return result;
+    }
+    if (name == "type_text" || name == "browser_type") {
+        return argos::typeText(args);
+    }
+    if (name == "scroll") {
+        int dir = 1; // default down
+        if (args == "up" || args == "0") dir = 0;
+        std::string result = argos::scrollScreen(dir);
+        // Wait for scroll to settle
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        return result;
     }
 
     return "{\"error\":\"Unknown tool: " + name + "\"}";

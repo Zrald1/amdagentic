@@ -132,4 +132,179 @@ std::string httpPostStream(const std::string& url, const std::string& headers,
     return result;
 }
 
+// Generic JNI helper: call a Java method on s_service that takes one String arg and returns String
+static std::string callJavaStringMethod(const char* methodName, const char* sig, const std::string& arg) {
+    if (!s_jvm || !s_service) {
+        return "{\"error\":\"JNI not initialized\"}";
+    }
+    JNIEnv* env = nullptr;
+    bool attached = false;
+    if (s_jvm->GetEnv((void**)&env, JNI_VERSION_1_6) != JNI_OK) {
+        s_jvm->AttachCurrentThread(&env, nullptr);
+        attached = true;
+    }
+    if (!env) return "{\"error\":\"Failed to get JNIEnv\"}";
+
+    jclass cls = env->GetObjectClass(s_service);
+    if (!cls) {
+        if (attached) s_jvm->DetachCurrentThread();
+        return "{\"error\":\"Failed to get service class\"}";
+    }
+    jmethodID mid = env->GetMethodID(cls, methodName, sig);
+    if (!mid) {
+        env->DeleteLocalRef(cls);
+        if (attached) s_jvm->DetachCurrentThread();
+        return "{\"error\":\"Method not found: " + std::string(methodName) + "\"}";
+    }
+
+    jstring jarg = env->NewStringUTF(arg.c_str());
+    jstring jresult = (jstring) env->CallObjectMethod(s_service, mid, jarg);
+
+    std::string result;
+    if (jresult) {
+        const char* chars = env->GetStringUTFChars(jresult, nullptr);
+        if (chars) {
+            result = chars;
+            env->ReleaseStringUTFChars(jresult, chars);
+        }
+        env->DeleteLocalRef(jresult);
+    }
+    env->DeleteLocalRef(jarg);
+    env->DeleteLocalRef(cls);
+
+    if (env->ExceptionCheck()) {
+        env->ExceptionDescribe();
+        env->ExceptionClear();
+        if (result.empty()) result = "{\"error\":\"Java exception in " + std::string(methodName) + "\"}";
+    }
+    if (attached) s_jvm->DetachCurrentThread();
+    return result;
+}
+
+// Generic JNI helper: call a Java method on s_service that takes one int arg and returns String
+static std::string callJavaIntMethod(const char* methodName, const char* sig, int arg) {
+    if (!s_jvm || !s_service) {
+        return "{\"error\":\"JNI not initialized\"}";
+    }
+    JNIEnv* env = nullptr;
+    bool attached = false;
+    if (s_jvm->GetEnv((void**)&env, JNI_VERSION_1_6) != JNI_OK) {
+        s_jvm->AttachCurrentThread(&env, nullptr);
+        attached = true;
+    }
+    if (!env) return "{\"error\":\"Failed to get JNIEnv\"}";
+
+    jclass cls = env->GetObjectClass(s_service);
+    if (!cls) {
+        if (attached) s_jvm->DetachCurrentThread();
+        return "{\"error\":\"Failed to get service class\"}";
+    }
+    jmethodID mid = env->GetMethodID(cls, methodName, sig);
+    if (!mid) {
+        env->DeleteLocalRef(cls);
+        if (attached) s_jvm->DetachCurrentThread();
+        return "{\"error\":\"Method not found: " + std::string(methodName) + "\"}";
+    }
+
+    jstring jresult = (jstring) env->CallObjectMethod(s_service, mid, (jint)arg);
+
+    std::string result;
+    if (jresult) {
+        const char* chars = env->GetStringUTFChars(jresult, nullptr);
+        if (chars) {
+            result = chars;
+            env->ReleaseStringUTFChars(jresult, chars);
+        }
+        env->DeleteLocalRef(jresult);
+    }
+    env->DeleteLocalRef(cls);
+
+    if (env->ExceptionCheck()) {
+        env->ExceptionDescribe();
+        env->ExceptionClear();
+        if (result.empty()) result = "{\"error\":\"Java exception in " + std::string(methodName) + "\"}";
+    }
+    if (attached) s_jvm->DetachCurrentThread();
+    return result;
+}
+
+// Generic JNI helper: call a Java method on s_service with no args, returns String
+static std::string callJavaNoArgMethod(const char* methodName, const char* sig) {
+    if (!s_jvm || !s_service) {
+        return "{\"error\":\"JNI not initialized\"}";
+    }
+    JNIEnv* env = nullptr;
+    bool attached = false;
+    if (s_jvm->GetEnv((void**)&env, JNI_VERSION_1_6) != JNI_OK) {
+        s_jvm->AttachCurrentThread(&env, nullptr);
+        attached = true;
+    }
+    if (!env) return "{\"error\":\"Failed to get JNIEnv\"}";
+
+    jclass cls = env->GetObjectClass(s_service);
+    if (!cls) {
+        if (attached) s_jvm->DetachCurrentThread();
+        return "{\"error\":\"Failed to get service class\"}";
+    }
+    jmethodID mid = env->GetMethodID(cls, methodName, sig);
+    if (!mid) {
+        env->DeleteLocalRef(cls);
+        if (attached) s_jvm->DetachCurrentThread();
+        return "{\"error\":\"Method not found: " + std::string(methodName) + "\"}";
+    }
+
+    jstring jresult = (jstring) env->CallObjectMethod(s_service, mid);
+
+    std::string result;
+    if (jresult) {
+        const char* chars = env->GetStringUTFChars(jresult, nullptr);
+        if (chars) {
+            result = chars;
+            env->ReleaseStringUTFChars(jresult, chars);
+        }
+        env->DeleteLocalRef(jresult);
+    }
+    env->DeleteLocalRef(cls);
+
+    if (env->ExceptionCheck()) {
+        env->ExceptionDescribe();
+        env->ExceptionClear();
+        if (result.empty()) result = "{\"error\":\"Java exception in " + std::string(methodName) + "\"}";
+    }
+    if (attached) s_jvm->DetachCurrentThread();
+    return result;
+}
+
+// ── Browser / Screen interaction platform functions ──
+
+std::string openUrl(const std::string& url) {
+    LOGI("openUrl: %s", url.c_str());
+    return callJavaStringMethod("openUrlJava", "(Ljava/lang/String;)Ljava/lang/String;", url);
+}
+
+std::string getScreenText() {
+    LOGI("getScreenText");
+    return callJavaNoArgMethod("getScreenTextJava", "()Ljava/lang/String;");
+}
+
+std::string getActiveApp() {
+    LOGI("getActiveApp");
+    return callJavaNoArgMethod("getActiveAppJava", "()Ljava/lang/String;");
+}
+
+std::string clickText(const std::string& text) {
+    LOGI("clickText: %s", text.c_str());
+    return callJavaStringMethod("clickTextJava", "(Ljava/lang/String;)Ljava/lang/String;", text);
+}
+
+std::string typeText(const std::string& text) {
+    LOGI("typeText: %s", text.c_str());
+    return callJavaStringMethod("typeTextJava", "(Ljava/lang/String;)Ljava/lang/String;", text);
+}
+
+std::string scrollScreen(int direction) {
+    LOGI("scrollScreen: %d", direction);
+    return callJavaIntMethod("scrollScreenJava", "(I)Ljava/lang/String;", direction);
+}
+
 } // namespace argos

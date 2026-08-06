@@ -307,4 +307,110 @@ std::string scrollScreen(int direction) {
     return callJavaIntMethod("scrollScreenJava", "(I)Ljava/lang/String;", direction);
 }
 
+// ── UI Inspection & Automation ──
+
+std::string getUITree(int maxDepth) {
+    LOGI("getUITree: maxDepth=%d", maxDepth);
+    return callJavaIntMethod("getUITreeJava", "(I)Ljava/lang/String;", maxDepth);
+}
+
+// Two-string-arg JNI helper for performUIAction
+static std::string callJavaTwoStringIntMethod(const char* methodName, const char* sig,
+                                               int arg1, const std::string& arg2, const std::string& arg3) {
+    if (!s_jvm || !s_service) return "{\"error\":\"JNI not initialized\"}";
+    JNIEnv* env = nullptr;
+    bool attached = false;
+    if (s_jvm->GetEnv((void**)&env, JNI_VERSION_1_6) != JNI_OK) {
+        s_jvm->AttachCurrentThread(&env, nullptr);
+        attached = true;
+    }
+    if (!env) return "{\"error\":\"Failed to get JNIEnv\"}";
+
+    jclass cls = env->GetObjectClass(s_service);
+    if (!cls) { if (attached) s_jvm->DetachCurrentThread(); return "{\"error\":\"No class\"}"; }
+    jmethodID mid = env->GetMethodID(cls, methodName, sig);
+    if (!mid) {
+        env->DeleteLocalRef(cls);
+        if (attached) s_jvm->DetachCurrentThread();
+        return "{\"error\":\"Method not found: " + std::string(methodName) + "\"}";
+    }
+
+    jstring jarg2 = env->NewStringUTF(arg2.c_str());
+    jstring jarg3 = env->NewStringUTF(arg3.c_str());
+    jstring jresult = (jstring) env->CallObjectMethod(s_service, mid, (jint)arg1, jarg2, jarg3);
+
+    std::string result;
+    if (jresult) {
+        const char* chars = env->GetStringUTFChars(jresult, nullptr);
+        if (chars) { result = chars; env->ReleaseStringUTFChars(jresult, chars); }
+        env->DeleteLocalRef(jresult);
+    }
+    env->DeleteLocalRef(jarg2);
+    env->DeleteLocalRef(jarg3);
+    env->DeleteLocalRef(cls);
+
+    if (env->ExceptionCheck()) { env->ExceptionDescribe(); env->ExceptionClear(); }
+    if (attached) s_jvm->DetachCurrentThread();
+    return result;
+}
+
+std::string performUIAction(int elementId, const std::string& action, const std::string& extra) {
+    LOGI("performUIAction: id=%d action=%s extra=%s", elementId, action.c_str(), extra.c_str());
+    return callJavaTwoStringIntMethod("performUIActionJava", "(ILjava/lang/String;Ljava/lang/String;)Ljava/lang/String;",
+                                      elementId, action, extra);
+}
+
+std::string takeScreenshot(const std::string& savePath) {
+    LOGI("takeScreenshot: path=%s", savePath.c_str());
+    return callJavaStringMethod("takeScreenshotJava", "(Ljava/lang/String;)Ljava/lang/String;", savePath);
+}
+
+std::string getNotificationsList() {
+    LOGI("getNotificationsList");
+    return callJavaNoArgMethod("getNotificationsJava", "()Ljava/lang/String;");
+}
+
+// Two-int-one-string JNI helper for replyToNotification
+static std::string callJavaIntStringMethod(const char* methodName, const char* sig,
+                                            int arg1, const std::string& arg2) {
+    if (!s_jvm || !s_service) return "{\"error\":\"JNI not initialized\"}";
+    JNIEnv* env = nullptr;
+    bool attached = false;
+    if (s_jvm->GetEnv((void**)&env, JNI_VERSION_1_6) != JNI_OK) {
+        s_jvm->AttachCurrentThread(&env, nullptr);
+        attached = true;
+    }
+    if (!env) return "{\"error\":\"Failed to get JNIEnv\"}";
+
+    jclass cls = env->GetObjectClass(s_service);
+    if (!cls) { if (attached) s_jvm->DetachCurrentThread(); return "{\"error\":\"No class\"}"; }
+    jmethodID mid = env->GetMethodID(cls, methodName, sig);
+    if (!mid) {
+        env->DeleteLocalRef(cls);
+        if (attached) s_jvm->DetachCurrentThread();
+        return "{\"error\":\"Method not found: " + std::string(methodName) + "\"}";
+    }
+
+    jstring jarg2 = env->NewStringUTF(arg2.c_str());
+    jstring jresult = (jstring) env->CallObjectMethod(s_service, mid, (jint)arg1, jarg2);
+
+    std::string result;
+    if (jresult) {
+        const char* chars = env->GetStringUTFChars(jresult, nullptr);
+        if (chars) { result = chars; env->ReleaseStringUTFChars(jresult, chars); }
+        env->DeleteLocalRef(jresult);
+    }
+    env->DeleteLocalRef(jarg2);
+    env->DeleteLocalRef(cls);
+
+    if (env->ExceptionCheck()) { env->ExceptionDescribe(); env->ExceptionClear(); }
+    if (attached) s_jvm->DetachCurrentThread();
+    return result;
+}
+
+std::string replyToNotificationByIdx(int index, const std::string& message) {
+    LOGI("replyToNotificationByIdx: idx=%d msg=%s", index, message.c_str());
+    return callJavaIntStringMethod("replyToNotificationJava", "(ILjava/lang/String;)Ljava/lang/String;", index, message);
+}
+
 } // namespace argos

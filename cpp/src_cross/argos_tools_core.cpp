@@ -1,5 +1,6 @@
 #include "argos_tools_core.h"
 #include "platform.h"
+#include "ui_inspector.h"
 #include <sstream>
 #include <fstream>
 #include <dirent.h>
@@ -182,6 +183,98 @@ std::string dispatch_tool(const std::string& tool_name, const std::string& args)
         // Wait for scroll to settle
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
         return result;
+    }
+
+    // ── UI Inspection & Automation tools ──
+
+    if (name == "ui_inspect" || name == "inspect_ui" || name == "ui_tree") {
+        // Optional depth argument: "ui_inspect" or "ui_inspect 15"
+        int maxDepth = -1;
+        if (!args.empty()) {
+            maxDepth = std::atoi(args.c_str());
+            if (maxDepth <= 0) maxDepth = -1;
+        }
+        return argos::getUITree(maxDepth);
+    }
+
+    if (name == "ui_click" || name == "ui_tap") {
+        // Args can be: element ID number, or text to find
+        if (args.empty()) return "{\"error\":\"ui_click needs element ID or text\"}";
+        // Check if args is a number (element ID)
+        bool isNumber = true;
+        for (char c : args) { if (!isdigit(c) && c != '-') { isNumber = false; break; } }
+        if (isNumber) {
+            int id = std::atoi(args.c_str());
+            std::string result = argos::performUIAction(id, "click", "");
+            std::this_thread::sleep_for(std::chrono::milliseconds(800));
+            return result;
+        }
+        // Otherwise treat as text to find and click
+        return argos_ui::clickElementByText(args, false);
+    }
+
+    if (name == "ui_longpress" || name == "ui_long_click") {
+        if (args.empty()) return "{\"error\":\"ui_longpress needs element ID or text\"}";
+        bool isNumber = true;
+        for (char c : args) { if (!isdigit(c) && c != '-') { isNumber = false; break; } }
+        if (isNumber) {
+            int id = std::atoi(args.c_str());
+            std::string result = argos::performUIAction(id, "long_click", "");
+            std::this_thread::sleep_for(std::chrono::milliseconds(800));
+            return result;
+        }
+        return argos_ui::clickElementByText(args, true);
+    }
+
+    if (name == "ui_type" || name == "ui_input") {
+        // Args format: "elementId|text" or just "text" (auto-find field)
+        size_t pipe = args.find('|');
+        if (pipe != std::string::npos) {
+            int id = std::atoi(args.substr(0, pipe).c_str());
+            std::string text = args.substr(pipe + 1);
+            return argos::performUIAction(id, "set_text", text);
+        }
+        // No element ID — find an editable field and type into it
+        return argos_ui::typeIntoFieldWithHint("", args);
+    }
+
+    if (name == "ui_action") {
+        // Args format: "elementId|action" or "elementId|action|extra"
+        // e.g. "5|click" or "3|set_text|Hello world"
+        size_t p1 = args.find('|');
+        if (p1 == std::string::npos) return "{\"error\":\"ui_action needs: elementId|action[|extra]\"}";
+        int id = std::atoi(args.substr(0, p1).c_str());
+        size_t p2 = args.find('|', p1 + 1);
+        std::string action = (p2 != std::string::npos) ? args.substr(p1 + 1, p2 - p1 - 1) : args.substr(p1 + 1);
+        std::string extra = (p2 != std::string::npos) ? args.substr(p2 + 1) : "";
+        std::string result = argos::performUIAction(id, action, extra);
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        return result;
+    }
+
+    if (name == "ui_sequence" || name == "ui_macro") {
+        // Args is a JSON array of action steps
+        // e.g. [{"action":"click","text":"Reply"},{"action":"type","text":"Hello!"},{"action":"click","text":"Send"}]
+        auto steps = argos_ui::parseActionSequence(args);
+        if (steps.empty()) return "{\"error\":\"No valid action steps parsed from: " + args + "\"}";
+        return argos_ui::executeActionSequence(steps);
+    }
+
+    if (name == "screenshot" || name == "screen_capture") {
+        return argos::takeScreenshot(args);
+    }
+
+    if (name == "notifications" || name == "get_notifications") {
+        return argos::getNotificationsList();
+    }
+
+    if (name == "notif_reply" || name == "notification_reply") {
+        // Args format: "index|message"
+        size_t pipe = args.find('|');
+        if (pipe == std::string::npos) return "{\"error\":\"notif_reply needs: index|message\"}";
+        int idx = std::atoi(args.substr(0, pipe).c_str());
+        std::string msg = args.substr(pipe + 1);
+        return argos::replyToNotificationByIdx(idx, msg);
     }
 
     return "{\"error\":\"Unknown tool: " + name + "\"}";

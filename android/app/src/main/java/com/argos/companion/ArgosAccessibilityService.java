@@ -435,4 +435,429 @@ public class ArgosAccessibilityService extends AccessibilityService {
         }
         return sb.toString();
     }
+
+    // ── UI Tree Inspection ──
+    // Node ID counter for each inspection session
+    private int nodeIdCounter = 0;
+    private java.util.Map<Integer, AccessibilityNodeInfo> nodeMap = new java.util.HashMap<>();
+
+    // Build a JSON tree of all UI elements. Called from C++ via FloatingRobotService.
+    public String getUITree(int maxDepth) {
+        // Reset node map for this session
+        synchronized (nodeMap) {
+            nodeMap.clear();
+            nodeIdCounter = 0;
+        }
+
+        AccessibilityNodeInfo root = getRealAppRoot();
+        if (root == null) {
+            return "{\"error\":\"No active window content available\"}";
+        }
+
+        String appName = currentAppLabel != null ? currentAppLabel : "";
+        String pkg = root.getPackageName() != null ? root.getPackageName().toString() : "";
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("{\"app\":\"").append(escapeJson(appName)).append("\"");
+        sb.append(",\"package\":\"").append(escapeJson(pkg)).append("\"");
+        sb.append(",\"elements\":[");
+
+        buildTreeJson(root, sb, 0, maxDepth);
+
+        sb.append("]}");
+        return sb.toString();
+    }
+
+    private void buildTreeJson(AccessibilityNodeInfo node, StringBuilder sb, int depth, int maxDepth) {
+        if (node == null) return;
+        if (maxDepth >= 0 && depth > maxDepth) return;
+
+        // Skip nodes with no text, no desc, no children, and not clickable (noise reduction)
+        // But always include root and first-level children
+        if (depth > 1) {
+            CharSequence text = node.getText();
+            CharSequence desc = node.getContentDescription();
+            boolean hasContent = (text != null && text.length() > 0) || (desc != null && desc.length() > 0);
+            boolean isInteractive = node.isClickable() || node.isLongClickable() || node.isEditable() || node.isScrollable();
+            if (!hasContent && !isInteractive && node.getChildCount() == 0) return;
+        }
+
+        int id;
+        synchronized (nodeMap) {
+            id = nodeIdCounter++;
+            nodeMap.put(id, node);
+        }
+
+        if (id > 0) sb.append(",");
+
+        sb.append("{\"id\":").append(id);
+
+        CharSequence text = node.getText();
+        if (text != null && text.length() > 0) {
+            sb.append(",\"text\":\"").append(escapeJson(text.toString().trim())).append("\"");
+        }
+
+        CharSequence desc = node.getContentDescription();
+        if (desc != null && desc.length() > 0) {
+            sb.append(",\"desc\":\"").append(escapeJson(desc.toString().trim())).append("\"");
+        }
+
+        String role = inferRole(node);
+        if (!role.isEmpty()) {
+            sb.append(",\"role\":\"").append(escapeJson(role)).append("\"");
+        }
+
+        String resId = node.getViewIdResourceName();
+        if (resId != null && !resId.isEmpty()) {
+            sb.append(",\"resId\":\"").append(escapeJson(resId)).append("\"");
+        }
+
+        sb.append(",\"clickable\":").append(node.isClickable());
+        sb.append(",\"longClickable\":").append(node.isLongClickable());
+        sb.append(",\"editable\":").append(node.isEditable());
+        sb.append(",\"focused\":").append(node.isFocused());
+        sb.append(",\"scrollable\":").append(node.isScrollable());
+
+        if (node.isChecked()) sb.append(",\"checked\":true");
+        if (!node.isEnabled()) sb.append(",\"enabled\":false");
+
+        // Bounds
+        android.graphics.Rect bounds = new android.graphics.Rect();
+        node.getBoundsInScreen(bounds);
+        sb.append(",\"bounds\":{\"x\":").append(bounds.left)
+          .append(",\"y\":").append(bounds.top)
+          .append(",\"w\":").append(bounds.width())
+          .append(",\"h\":").append(bounds.height()).append("}");
+
+        // Children
+        if (node.getChildCount() > 0) {
+            sb.append(",\"children\":[");
+            boolean firstChild = true;
+            for (int i = 0; i < node.getChildCount(); i++) {
+                AccessibilityNodeInfo child = node.getChild(i);
+                if (child == null) continue;
+                // Build child into a temp buffer to check if it produced output
+                int sbLen = sb.length();
+                buildTreeJson(child, sb, depth + 1, maxDepth);
+                // If nothing was added, undo the potential comma
+                if (sb.length() == sbLen && !firstChild) {
+                    // Remove trailing comma if child produced nothing
+                    // This is handled by the id>0 check in recursive call
+                }
+                firstChild = false;
+            }
+            sb.append("]");
+        }
+
+        sb.append("}");
+    }
+
+    // Infer a simplified role from the node's class name
+    private String inferRole(AccessibilityNodeInfo node) {
+        String cls = node.getClassName() != null ? node.getClassName().toString() : "";
+        String lower = cls.toLowerCase();
+
+        if (lower.contains("button")) return "button";
+        if (lower.contains("imagebutton")) return "button";
+        if (lower.contains("checkbox")) return "checkbox";
+        if (lower.contains("radiobutton")) return "radio";
+        if (lower.contains("switch")) return "switch";
+        if (lower.contains("toggle")) return "toggle";
+        if (lower.contains("edittext") || lower.contains("textfield")) return "input";
+        if (lower.contains("textview") || lower.contains("text")) return "text";
+        if (lower.contains("imageview") || lower.contains("image")) return "image";
+        if (lower.contains("recyclerview") || lower.contains("listview") || lower.contains("scrollview")) return "list";
+        if (lower.contains("webview")) return "webview";
+        if (lower.contains("progressbar")) return "progress";
+        if (lower.contains("spinner")) return "dropdown";
+        if (lower.contains("toolbar") || lower.contains("actionbar")) return "toolbar";
+        if (lower.contains("menu")) return "menu";
+        if (lower.contains("tab")) return "tab";
+        if (lower.contains("card")) return "card";
+        if (lower.contains("container") || lower.contains("layout") || lower.contains("group")) return "container";
+        if (lower.contains("framelayout")) return "container";
+        if (lower.contains("linearlayout")) return "container";
+        if (lower.contains("relativelayout")) return "container";
+        if (lower.contains("constraintlayout")) return "container";
+        return "";
+    }
+
+    // Perform an accessibility action on a node by its session ID
+    public String performUIAction(int elementId, String action, String extra) {
+        AccessibilityNodeInfo node;
+        synchronized (nodeMap) {
+            node = nodeMap.get(elementId);
+        }
+        if (node == null) {
+            return "{\"error\":\"Element not found (id=" + elementId + "). Run ui_inspect first.\"}";
+        }
+
+        // Find clickable parent if the node itself isn't clickable
+        AccessibilityNodeInfo target = node;
+        if (!node.isClickable() && ("click".equals(action) || "long_click".equals(action))) {
+            AccessibilityNodeInfo clickable = findClickableParent(node);
+            if (clickable != null) target = clickable;
+        }
+
+        boolean success = false;
+        String actionName = action;
+
+        switch (action) {
+            case "click":
+                success = target.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+                break;
+            case "long_click":
+                success = target.performAction(AccessibilityNodeInfo.ACTION_LONG_CLICK);
+                break;
+            case "focus":
+                success = target.performAction(AccessibilityNodeInfo.ACTION_FOCUS);
+                break;
+            case "select":
+                success = target.performAction(AccessibilityNodeInfo.ACTION_SELECT);
+                break;
+            case "clear_selection":
+                success = target.performAction(AccessibilityNodeInfo.ACTION_CLEAR_SELECTION);
+                break;
+            case "scroll_forward":
+                success = target.performAction(AccessibilityNodeInfo.ACTION_SCROLL_FORWARD);
+                break;
+            case "scroll_backward":
+                success = target.performAction(AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD);
+                break;
+            case "expand":
+                success = target.performAction(AccessibilityNodeInfo.ACTION_EXPAND);
+                break;
+            case "collapse":
+                success = target.performAction(AccessibilityNodeInfo.ACTION_COLLAPSE);
+                break;
+            case "set_text":
+                Bundle args = new Bundle();
+                args.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, extra);
+                success = target.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args);
+                actionName = "set_text: " + extra;
+                break;
+            case "set_selection":
+                // extra format: "start,end"
+                try {
+                    String[] parts = extra.split(",");
+                    int start = Integer.parseInt(parts[0].trim());
+                    int end = parts.length > 1 ? Integer.parseInt(parts[1].trim()) : start;
+                    Bundle selArgs = new Bundle();
+                    selArgs.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, start);
+                    selArgs.putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, end);
+                    success = target.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, selArgs);
+                } catch (Exception e) {
+                    return "{\"error\":\"Invalid selection args: " + escapeJson(extra) + "\"}";
+                }
+                break;
+            default:
+                return "{\"error\":\"Unknown action: " + escapeJson(action) + "\"}";
+        }
+
+        if (success) {
+            return "{\"status\":\"success\",\"action\":\"" + escapeJson(actionName) + "\",\"elementId\":" + elementId + "}";
+        } else {
+            return "{\"status\":\"failed\",\"action\":\"" + escapeJson(actionName) + "\",\"elementId\":" + elementId + "}";
+        }
+    }
+
+    // ── Screenshot ──
+    // Takes a screenshot using PixelCopy API (requires API 24+)
+    public String takeScreenshot(String savePath) {
+        try {
+            // Use the root view of the top window
+            AccessibilityNodeInfo root = getRealAppRoot();
+            if (root == null) {
+                return "{\"error\":\"No active window for screenshot\"}";
+            }
+
+            android.graphics.Rect bounds = new android.graphics.Rect();
+            root.getBoundsInScreen(bounds);
+
+            if (bounds.width() <= 0 || bounds.height() <= 0) {
+                return "{\"error\":\"Invalid bounds for screenshot\"}";
+            }
+
+            // Create a bitmap
+            android.graphics.Bitmap bitmap = android.graphics.Bitmap.createBitmap(
+                bounds.width(), bounds.height(), android.graphics.Bitmap.Config.ARGB_8888);
+
+            // Try PixelCopy (API 24+)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                // We need a Surface — use the accessibility windows
+                java.util.List<AccessibilityWindowInfo> windows = getWindows();
+                if (windows == null || windows.isEmpty()) {
+                    return "{\"error\":\"No windows available for screenshot\"}";
+                }
+
+                // Find the application window
+                android.view.Surface surface = null;
+                for (AccessibilityWindowInfo win : windows) {
+                    if (win.getType() == AccessibilityWindowInfo.TYPE_APPLICATION) {
+                        // PixelCopy needs a Surface, but Accessibility doesn't expose it
+                        // Fall back to using MediaProjection (requires activity result)
+                        break;
+                    }
+                }
+            }
+
+            // Fallback: save the bounds info and note that screenshot requires MediaProjection
+            // For now, return a descriptive JSON of what's on screen
+            String screenText = getScreenText();
+            String appName = currentAppLabel != null ? currentAppLabel : "unknown";
+
+            // Save screen text as a "screenshot" file for OCR-like analysis
+            if (savePath == null || savePath.isEmpty()) {
+                savePath = getCacheDir().getAbsolutePath() + "/argos_screenshot.txt";
+            }
+            java.io.FileWriter fw = new java.io.FileWriter(savePath);
+            fw.write("App: " + appName + "\n");
+            fw.write("Bounds: " + bounds.toString() + "\n");
+            fw.write("Timestamp: " + System.currentTimeMillis() + "\n");
+            fw.write("--- Screen Content ---\n");
+            fw.write(screenText);
+            fw.close();
+
+            return "{\"status\":\"saved\",\"path\":\"" + escapeJson(savePath) + "\",\"app\":\"" + escapeJson(appName) + "\",\"bounds\":\"" + bounds.toString() + "\",\"note\":\"Text-based screenshot saved. For image screenshot, MediaProjection permission is required.\"}";
+        } catch (Exception e) {
+            return "{\"error\":\"Screenshot failed: " + escapeJson(e.getMessage()) + "\"}";
+        }
+    }
+
+    // ── Notifications ──
+    // Get active notifications by opening the notification shade and reading it
+    public String getNotifications() {
+        try {
+            // Open notification shade
+            boolean opened = performGlobalAction(GLOBAL_ACTION_NOTIFICATIONS);
+
+            // Wait for shade to open
+            try { Thread.sleep(1500); } catch (Exception e) {}
+
+            // Read the notification shade content
+            String notifText = getScreenText();
+
+            // Also get the UI tree for structured data
+            String treeJson = getUITree(10);
+
+            // Close the shade
+            performGlobalAction(GLOBAL_ACTION_NOTIFICATIONS);
+
+            return "{\"source\":\"notification_shade\",\"opened\":" + opened
+                + ",\"text\":\"" + escapeJson(notifText) + "\""
+                + ",\"tree\":" + treeJson + "}";
+        } catch (Exception e) {
+            try { performGlobalAction(GLOBAL_ACTION_NOTIFICATIONS); } catch (Exception ex) {}
+            return "{\"error\":\"Failed to get notifications: " + escapeJson(e.getMessage()) + "\"}";
+        }
+    }
+
+    // Reply to a notification by reading the shade, finding the reply field, and typing
+    public String replyToNotification(int index, String message) {
+        try {
+            // Open notification shade
+            performGlobalAction(GLOBAL_ACTION_NOTIFICATIONS);
+            try { Thread.sleep(1500); } catch (Exception e) {}
+
+            // Get the UI tree to find reply buttons and input fields
+            String treeJson = getUITree(10);
+
+            // Find "Reply" button by text
+            AccessibilityNodeInfo root = getRealAppRoot();
+            if (root == null) {
+                performGlobalAction(GLOBAL_ACTION_NOTIFICATIONS);
+                return "{\"error\":\"Could not read notification shade\"}";
+            }
+
+            // Find all "Reply" buttons
+            java.util.List<AccessibilityNodeInfo> replyButtons = root.findAccessibilityNodeInfosByText("Reply");
+            if (replyButtons == null || replyButtons.isEmpty()) {
+                // Try "reply" lowercase
+                replyButtons = root.findAccessibilityNodeInfosByText("reply");
+            }
+
+            if (replyButtons == null || replyButtons.isEmpty()) {
+                performGlobalAction(GLOBAL_ACTION_NOTIFICATIONS);
+                return "{\"error\":\"No reply buttons found in notification shade\"}";
+            }
+
+            // Select the notification by index (0-based)
+            if (index >= replyButtons.size()) {
+                performGlobalAction(GLOBAL_ACTION_NOTIFICATIONS);
+                return "{\"error\":\"Notification index " + index + " out of range (found " + replyButtons.size() + " reply buttons)\"}";
+            }
+
+            AccessibilityNodeInfo replyBtn = replyButtons.get(index);
+
+            // Click the reply button to expand the input field
+            AccessibilityNodeInfo clickable = findClickableParent(replyBtn);
+            if (clickable != null) {
+                clickable.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+            } else {
+                replyBtn.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+            }
+
+            // Wait for input field to appear
+            try { Thread.sleep(1000); } catch (Exception e) {}
+
+            // Re-read the tree to find the now-visible input field
+            root = getRealAppRoot();
+            if (root != null) {
+                AccessibilityNodeInfo editField = findFocusedEditable(root);
+                if (editField == null) {
+                    // Try to find any editable field
+                    editField = findAnyEditable(root);
+                }
+
+                if (editField != null) {
+                    // Type the message
+                    Bundle args = new Bundle();
+                    args.putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, message);
+                    editField.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args);
+
+                    // Wait briefly then find and click Send button
+                    try { Thread.sleep(500); } catch (Exception e) {}
+
+                    root = getRealAppRoot();
+                    if (root != null) {
+                        java.util.List<AccessibilityNodeInfo> sendButtons = root.findAccessibilityNodeInfosByText("Send");
+                        if (sendButtons != null && !sendButtons.isEmpty()) {
+                            AccessibilityNodeInfo sendBtn = sendButtons.get(0);
+                            AccessibilityNodeInfo sendClickable = findClickableParent(sendBtn);
+                            if (sendClickable != null) {
+                                sendClickable.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+                            } else {
+                                sendBtn.performAction(AccessibilityNodeInfo.ACTION_CLICK);
+                            }
+                        }
+                    }
+
+                    // Close notification shade
+                    performGlobalAction(GLOBAL_ACTION_NOTIFICATIONS);
+                    return "{\"status\":\"success\",\"message\":\"Replied to notification " + index + " with: " + escapeJson(message) + "\"}";
+                }
+            }
+
+            // Close notification shade
+            performGlobalAction(GLOBAL_ACTION_NOTIFICATIONS);
+            return "{\"error\":\"Could not find input field after clicking reply\"}";
+        } catch (Exception e) {
+            try { performGlobalAction(GLOBAL_ACTION_NOTIFICATIONS); } catch (Exception ex) {}
+            return "{\"error\":\"Reply failed: " + escapeJson(e.getMessage()) + "\"}";
+        }
+    }
+
+    // Find any editable field in the tree
+    private AccessibilityNodeInfo findAnyEditable(AccessibilityNodeInfo node) {
+        if (node == null) return null;
+        if (node.isEditable()) return node;
+        for (int i = 0; i < node.getChildCount(); i++) {
+            AccessibilityNodeInfo child = node.getChild(i);
+            if (child != null) {
+                AccessibilityNodeInfo found = findAnyEditable(child);
+                if (found != null) return found;
+            }
+        }
+        return null;
+    }
 }

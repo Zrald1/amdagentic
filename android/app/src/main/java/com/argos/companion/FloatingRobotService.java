@@ -977,6 +977,38 @@ public class FloatingRobotService extends Service implements SurfaceHolder.Callb
         return svc.scrollScreen(direction);
     }
 
+    // ── UI Inspection & Automation bridge methods ──
+
+    public String getUITreeJava(int maxDepth) {
+        ArgosAccessibilityService svc = ArgosAccessibilityService.getInstance();
+        if (svc == null) return "{\"error\":\"Accessibility service not enabled.\"}";
+        return svc.getUITree(maxDepth);
+    }
+
+    public String performUIActionJava(int elementId, String action, String extra) {
+        ArgosAccessibilityService svc = ArgosAccessibilityService.getInstance();
+        if (svc == null) return "{\"error\":\"Accessibility service not enabled.\"}";
+        return svc.performUIAction(elementId, action, extra);
+    }
+
+    public String takeScreenshotJava(String savePath) {
+        ArgosAccessibilityService svc = ArgosAccessibilityService.getInstance();
+        if (svc == null) return "{\"error\":\"Accessibility service not enabled.\"}";
+        return svc.takeScreenshot(savePath);
+    }
+
+    public String getNotificationsJava() {
+        ArgosAccessibilityService svc = ArgosAccessibilityService.getInstance();
+        if (svc == null) return "{\"error\":\"Accessibility service not enabled.\"}";
+        return svc.getNotifications();
+    }
+
+    public String replyToNotificationJava(int index, String message) {
+        ArgosAccessibilityService svc = ArgosAccessibilityService.getInstance();
+        if (svc == null) return "{\"error\":\"Accessibility service not enabled.\"}";
+        return svc.replyToNotification(index, message);
+    }
+
     // Called from C++ via JNI to perform HTTP POST (handles HTTPS automatically)
     public String httpPostJava(String url, String headers, String body, boolean stream) {
         try {

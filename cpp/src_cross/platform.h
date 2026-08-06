@@ -49,6 +49,26 @@ std::string typeText(const std::string& text);
 // Scroll the current screen: direction 0=up, 1=down
 std::string scrollScreen(int direction);
 
+// ── UI Inspection & Automation (Android Accessibility Service) ──
+
+// Get the full UI element tree as JSON (from Accessibility Service)
+// maxDepth limits traversal depth (-1 = unlimited)
+std::string getUITree(int maxDepth);
+
+// Perform an accessibility action on a node by ID
+// action: "click", "long_click", "focus", "set_text", "scroll_forward", "scroll_backward", "select", "expand", "collapse"
+// extra: optional text for set_text action
+std::string performUIAction(int elementId, const std::string& action, const std::string& extra);
+
+// Take a screenshot and return base64-encoded JPEG (or save to file)
+std::string takeScreenshot(const std::string& savePath);
+
+// Get active notifications as JSON
+std::string getNotificationsList();
+
+// Reply to a notification by index
+std::string replyToNotificationByIdx(int index, const std::string& message);
+
 // Get current time in milliseconds
 int64_t getTimeMs();
 

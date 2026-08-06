@@ -22,6 +22,7 @@ set(ARGOS_SOURCES
     # Shared core (platform-abstracted versions)
     ${CROSS_DIR}/agent_client_core.cpp
     ${CROSS_DIR}/argos_tools_core.cpp
+    ${CROSS_DIR}/ui_inspector.cpp
 )
 
 add_library(argos SHARED ${ARGOS_SOURCES})

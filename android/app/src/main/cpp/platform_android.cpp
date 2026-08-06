@@ -19,6 +19,8 @@
 #include <netdb.h>
 #include <arpa/inet.h>
 #include <sstream>
+#include <errno.h>
+#include <string.h>
 
 namespace argos {
 
@@ -78,42 +80,52 @@ static std::string httpRequest(const std::string& url, const std::string& header
     UrlParts parts;
     if (!parseUrl(url, parts)) {
         LOGE("Failed to parse URL: %s", url.c_str());
-        return "";
+        return "[Error: Failed to parse URL: " + url + "]";
     }
+
+    LOGI("HTTP %s %s:%d%s stream=%d", parts.protocol.c_str(), parts.host.c_str(), parts.port, parts.path.c_str(), stream);
 
     if (parts.protocol == "https") {
         LOGE("HTTPS not supported in raw socket mode. Use HTTP or link libcurl.");
-        return "";
+        return "[Error: HTTPS not supported. Use HTTP URL.]";
     }
 
-    // Resolve hostname
-    struct hostent* he = gethostbyname(parts.host.c_str());
-    if (!he) {
-        LOGE("DNS resolution failed for %s", parts.host.c_str());
-        return "";
+    // Resolve hostname using getaddrinfo (more reliable than gethostbyname on Android)
+    struct addrinfo hints = {};
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    struct addrinfo* result = nullptr;
+    int dnsErr = getaddrinfo(parts.host.c_str(), nullptr, &hints, &result);
+    if (dnsErr != 0 || !result) {
+        LOGE("DNS resolution failed for %s: %s", parts.host.c_str(), gai_strerror(dnsErr));
+        return "[Error: DNS resolution failed for " + parts.host + "]";
     }
 
     int sock = socket(AF_INET, SOCK_STREAM, 0);
     if (sock < 0) {
-        LOGE("Socket creation failed");
-        return "";
+        LOGE("Socket creation failed: %s", strerror(errno));
+        freeaddrinfo(result);
+        return "[Error: Socket creation failed]";
     }
 
     struct sockaddr_in addr = {};
     addr.sin_family = AF_INET;
     addr.sin_port = htons(parts.port);
-    memcpy(&addr.sin_addr, he->h_addr_list[0], he->h_length);
+    memcpy(&addr.sin_addr, &((struct sockaddr_in*)result->ai_addr)->sin_addr, sizeof(struct in_addr));
+    freeaddrinfo(result);
 
     // Set timeout (30s)
     struct timeval tv = {30, 0};
     setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
     setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
 
+    LOGI("Connecting to %s:%d...", parts.host.c_str(), parts.port);
     if (connect(sock, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
-        LOGE("Connection failed to %s:%d", parts.host.c_str(), parts.port);
+        LOGE("Connection failed to %s:%d: %s", parts.host.c_str(), parts.port, strerror(errno));
         close(sock);
-        return "";
+        return "[Error: Connection failed to " + parts.host + ":" + std::to_string(parts.port) + "]";
     }
+    LOGI("Connected to %s:%d", parts.host.c_str(), parts.port);
 
     // Build HTTP request
     std::ostringstream req;
@@ -122,21 +134,27 @@ static std::string httpRequest(const std::string& url, const std::string& header
     req << "Content-Type: application/json\r\n";
     req << "Content-Length: " << body.size() << "\r\n";
     req << "Connection: close\r\n";
+    if (stream) {
+        req << "Accept: text/event-stream\r\n";
+    }
     req << headers;
     req << "\r\n" << body;
 
     std::string reqStr = req.str();
+    LOGI("Sending request, len=%zu", reqStr.size());
     if (send(sock, reqStr.c_str(), reqStr.size(), 0) < 0) {
-        LOGE("Send failed");
+        LOGE("Send failed: %s", strerror(errno));
         close(sock);
-        return "";
+        return "[Error: Send failed]";
     }
+    LOGI("Request sent, waiting for response...");
 
     // Read response
-    std::string fullResponse;
+    std::string fullBody;
     std::string accumulated;
     bool headersStripped = false;
     bool isChunked = false;
+    int httpStatus = 0;
     char buf[8192];
     ssize_t n;
     while ((n = recv(sock, buf, sizeof(buf), 0)) > 0) {
@@ -146,29 +164,30 @@ static std::string httpRequest(const std::string& url, const std::string& header
             // Find end of HTTP headers
             size_t headerEnd = accumulated.find("\r\n\r\n");
             if (headerEnd != std::string::npos) {
-                std::string headers = accumulated.substr(0, headerEnd);
-                LOGI("HTTP response headers: %s", headers.c_str());
+                std::string respHeaders = accumulated.substr(0, headerEnd);
+                LOGI("HTTP response headers: %s", respHeaders.c_str());
 
-                // Check for error status
-                if (headers.find("200") == std::string::npos &&
-                    headers.find("OK") == std::string::npos) {
-                    LOGE("HTTP error: %s", headers.substr(0, 64).c_str());
+                // Parse HTTP status code from first line: "HTTP/1.1 200 OK"
+                size_t spacePos = respHeaders.find(' ');
+                if (spacePos != std::string::npos) {
+                    httpStatus = atoi(respHeaders.c_str() + spacePos + 1);
+                    LOGI("HTTP status code: %d", httpStatus);
                 }
 
-                isChunked = headers.find("chunked") != std::string::npos;
+                isChunked = respHeaders.find("chunked") != std::string::npos;
 
-                std::string body = accumulated.substr(headerEnd + 4);
-                accumulated = body;
+                std::string bodyAfterHeaders = accumulated.substr(headerEnd + 4);
+                accumulated = bodyAfterHeaders;
                 headersStripped = true;
 
-                if (!isChunked && stream && callback && !body.empty()) {
-                    if (!callback(body)) {
+                if (!isChunked && stream && callback && !bodyAfterHeaders.empty()) {
+                    if (!callback(bodyAfterHeaders)) {
                         close(sock);
-                        return body;
+                        return bodyAfterHeaders;
                     }
                 }
                 if (!stream) {
-                    fullResponse = body;
+                    fullBody = bodyAfterHeaders;
                 }
             }
         } else {
@@ -179,15 +198,25 @@ static std::string httpRequest(const std::string& url, const std::string& header
                     if (!callback(chunk)) break;
                 }
                 if (!stream) {
-                    fullResponse += chunk;
+                    fullBody += chunk;
                 }
-            } else {
-                // For chunked: just accumulate, decode at end
-                // (subsequent recv data is already in accumulated)
             }
+            // For chunked: data is already in accumulated
         }
     }
+    
+    if (n < 0) {
+        LOGE("recv error: %s", strerror(errno));
+    }
     close(sock);
+    LOGI("Connection closed, total body bytes=%zu", headersStripped ? (isChunked ? accumulated.size() : fullBody.size()) : 0);
+
+    // Check HTTP status
+    if (httpStatus != 0 && (httpStatus < 200 || httpStatus >= 300)) {
+        std::string errBody = isChunked ? accumulated : fullBody;
+        LOGE("HTTP error %d, body: %s", httpStatus, errBody.substr(0, 500).c_str());
+        return "[Error: HTTP " + std::to_string(httpStatus) + ": " + errBody.substr(0, 200) + "]";
+    }
 
     if (isChunked) {
         // Decode chunked body from accumulated
@@ -212,20 +241,22 @@ static std::string httpRequest(const std::string& url, const std::string& header
                 if (!callback(chunkData)) break;
             }
         }
-        if (!stream) {
-            return decoded;
-        }
+        LOGI("Chunked decoded, len=%zu", decoded.size());
         return decoded;
     }
 
     if (!stream) {
         if (!headersStripped) {
-            size_t bodyStart = fullResponse.find("\r\n\r\n");
+            // Headers never found — try to extract from accumulated
+            size_t bodyStart = accumulated.find("\r\n\r\n");
             if (bodyStart != std::string::npos) {
-                return fullResponse.substr(bodyStart + 4);
+                return accumulated.substr(bodyStart + 4);
             }
+            LOGE("No HTTP headers found in response, raw: %s", accumulated.substr(0, 200).c_str());
+            return "[Error: No HTTP headers in response]";
         }
-        return fullResponse;
+        LOGI("Non-streaming response len=%zu", fullBody.size());
+        return fullBody;
     }
 
     return accumulated;

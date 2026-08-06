@@ -7,6 +7,8 @@
 #include <vector>
 #include <fstream>
 #include <shellapi.h>
+#include <cstdio>
+#include <ctime>
 
 #pragma comment(lib, "winhttp.lib")
 
@@ -77,6 +79,25 @@ static std::string WideToUtf8(const std::wstring& ws) {
         WideCharToMultiByte(CP_UTF8, 0, ws.c_str(), (int)ws.size(), &utf8[0], len, nullptr, nullptr);
     }
     return utf8;
+}
+
+// Error logging helper — writes timestamped messages to argos_error.log
+static void LogError(const std::string& message) {
+    FILE* logFile = nullptr;
+    fopen_s(&logFile, "argos_error.log", "a");
+    if (logFile) {
+        time_t now = time(nullptr);
+        struct tm tm_buf;
+        localtime_s(&tm_buf, &now);
+        char timeBuf[64];
+        strftime(timeBuf, sizeof(timeBuf), "%Y-%m-%d %H:%M:%S", &tm_buf);
+        fprintf(logFile, "[%s] %s\n", timeBuf, message.c_str());
+        fclose(logFile);
+    }
+}
+
+static void LogErrorW(const std::wstring& message) {
+    LogError(WideToUtf8(message));
 }
 
 AgentClient::AgentClient() {
@@ -159,101 +180,70 @@ void AgentClient::InitSystemPrompt() {
         L"You have a golden Spartan helmet and red eyes. "
         L"You are direct, concise, and protective. "
         L"You speak with the loyalty and devotion of a faithful companion. "
-        L"\n\n=== LOCAL KNOWLEDGE RETRIEVAL (RAG) ==="
-        L"\nYou have a modern RAG (Retrieval-Augmented Generation) pipeline built in. "
-        L"When the user asks a question, the system automatically searches their local project files "
-        L"using a hybrid retrieval architecture:\n"
-        L"  1. TF-IDF cosine similarity (dense retrieval)\n"
-        L"  2. BM25 keyword search (sparse retrieval)\n"
-        L"  3. Reciprocal Rank Fusion (RRF) to combine both result lists\n"
-        L"  4. Reranker for precision boost\n"
-        L"  5. Hierarchical chunking (returns parent context around matches)\n"
-        L"  6. Contextual chunking (file path + language metadata prepended)\n"
-        L"Relevant text passages are injected as [Local Knowledge Context] before your response. "
-        L"Use this context to give accurate, project-aware answers. "
-        L"If the RAG context is relevant, reference it naturally. "
-        L"If no relevant context was found, answer based on your general knowledge."
+        L"\n\n=== TOOL USAGE — CRITICAL RULES ===\n"
+        L"1. To call a tool, you MUST include the EXACT tag format: [TOOL:tool_name argument]\n"
+        L"2. The tag MUST start with [TOOL: (uppercase) and end with ]\n"
+        L"3. Example: [TOOL:screen_apps] or [TOOL:list_files C:\\Users\\geral\\Documents]\n"
+        L"4. You can include explanatory text BEFORE the tool tag. Example: 'Let me check your open apps. [TOOL:screen_apps]'\n"
+        L"5. After a tool executes, you will receive the results as a system message. Use those results to answer the user.\n"
+        L"6. NEVER say you will check something and then NOT include a tool tag. If you say 'Let me check...', you MUST include the tool tag in the SAME response.\n"
+        L"7. Do NOT invent or hallucinate tool names. Use ONLY the tools listed below.\n"
+        L"8. When the user asks about open tabs, windows, or apps, use [TOOL:screen_apps] to list all open windows.\n"
+        L"9. When the user asks about files in a folder, use [TOOL:list_files <path>] to list directory contents.\n"
+        L"10. Tool names are case-insensitive but must match the listed names exactly (e.g. screen_apps, not SCREEN_APP).\n"
         L"\n\n=== PERSISTENT MEMORY ==="
-        L"\nAll conversations are saved to persistent memory (JSONL file in %APPDATA%/Argos/). "
-        L"This means you can reference previous conversations across sessions. "
-        L"If the user asks about something you discussed before, check your memory."
-        L"\n\n=== PERMISSION CONTROL ==="
-        L"\nDestructive tools (write, run, lock) require user permission before execution. "
+        L"\nAll conversations are saved to persistent memory. "
+        L"If the user asks about something you discussed before, use [TOOL:recall] to load recent memory.\n"
+        L"\n\n=== PERMISSION CONTROL ===\n"
+        L"Destructive tools (write, run, lock) require user permission before execution. "
         L"The user will be shown a confirmation dialog before these tools run. "
         L"If the user denies permission, respect their decision and suggest alternatives."
-        L"\n\n=== PRIVACY ==="
-        L"\nScreen context is automatically filtered to redact sensitive data (passwords, tokens, "
+        L"\n\n=== PRIVACY ===\n"
+        L"Screen context is automatically filtered to redact sensitive data (passwords, tokens, "
         L"credit card numbers) before you see it. This protects the user's privacy."
         L"\n\nYou have the following tools available. "
         L"To use a tool, include a [TOOL:...] tag in your response:\n"
         L"\n--- System Tools ---\n"
-        L"1. [TOOL:open <path>] — Open a file, folder, or URL in the default application.\n"
-        L"2. [TOOL:run <command>] — Execute a system command (e.g. notepad, calc, explorer).\n"
-        L"3. [TOOL:read <filepath>] — Read the contents of a text file.\n"
-        L"4. [TOOL:write <filepath> | <content>] — Write content to a file.\n"
-        L"5. [TOOL:search <query>] — Open the browser and search the web.\n"
-        L"6. [TOOL:volume <level>] — Set system volume (0-100).\n"
-        L"7. [TOOL:screenshot] — Take a screenshot of the desktop.\n"
-        L"8. [TOOL:lock] — Lock the workstation.\n"
-        L"9. [TOOL:notify <message>] — Show a Windows notification balloon.\n"
-        L"10. [TOOL:clipboard <text>] — Copy text to clipboard.\n"
-        L"\n--- AI Search Tools (RAG-style file indexing & retrieval) ---\n"
-        L"11. [TOOL:index <dirpath>] — Index a directory: scan files, index text content (TF-IDF), fingerprint images. Returns JSON stats.\n"
-        L"12. [TOOL:search_files <dirpath>|<query>] — Search indexed text content with cosine similarity ranking. Returns JSON results.\n"
-        L"13. [TOOL:search_filename <dirpath>|<pattern>] — Search for files by filename pattern. Returns JSON results.\n"
-        L"14. [TOOL:full_map <dirpath>] — Complete JSON index of files + content for AI consumption.\n"
-        L"15. [TOOL:stats <dirpath>] — Get statistics about an indexed directory.\n"
-        L"\n--- Browser Automation Tools ---\n"
-        L"16. [TOOL:browser_navigate <url>] — Navigate the browser to a URL.\n"
-        L"17. [TOOL:browser_content] — Get the current page's text content.\n"
-        L"18. [TOOL:browser_title] — Get the current page title.\n"
-        L"19. [TOOL:browser_url] — Get the current page URL.\n"
-        L"20. [TOOL:browser_find <text>] — Find elements on the page by text content.\n"
-        L"21. [TOOL:browser_click <element_id>] — Click an element by its ID.\n"
-        L"22. [TOOL:browser_type <element_id>|<text>] — Type text into an input element.\n"
-        L"23. [TOOL:browser_screenshot] — Take a screenshot of the browser page.\n"
-        L"24. [TOOL:browser_links] — Get all links on the current page.\n"
-        L"25. [TOOL:browser_summarize] — Get an AI summary of the current page.\n"
-        L"\n--- Screen Context Tools (see what's on screen) ---\n"
-        L"26. [TOOL:screen_apps] — List all open application windows.\n"
-        L"27. [TOOL:screen_active] — Get the active/focused application info.\n"
-        L"28. [TOOL:screen_capture <output_path>] — Capture the entire screen as an image.\n"
-        L"29. [TOOL:screen_ocr] — Extract text from the screen using OCR.\n"
-        L"30. [TOOL:screen_context] — Get an assessment of what the user is currently doing.\n"
-        L"31. [TOOL:screen_search <query>] — Search for content visible on screen.\n"
-        L"32. [TOOL:screen_summary] — Get a summary of open apps by category.\n"
-        L"\n--- UI Locator Tools (find and interact with UI elements) ---\n"
-        L"33. [TOOL:ui_windows] — List all open windows.\n"
-        L"34. [TOOL:ui_elements <window_id>] — Get all UI elements in a window.\n"
-        L"35. [TOOL:ui_search <text>] — Search for UI elements by text label.\n"
-        L"36. [TOOL:ui_clickable <text_filter>] — Search for clickable elements (buttons, links).\n"
-        L"37. [TOOL:ui_click_at <x>,<y>] — Click at specific screen coordinates.\n"
-        L"38. [TOOL:ui_click <element_id>] — Click a UI element by its ID.\n"
-        L"39. [TOOL:ui_type <text>] — Type text into the focused element.\n"
-        L"40. [TOOL:ui_focus <window_id>] — Focus a specific window.\n"
-        L"41. [TOOL:ui_close <window_id>] — Close a specific window.\n"
-        L"42. [TOOL:ui_map] — Export the full UI element map as JSON.\n"
-        L"\nUse tools naturally when the user asks you to do something on their computer. "
-        L"Always explain what you're doing briefly, then include the tool tag. "
-        L"For example: 'Opening Notepad for you. [TOOL:run notepad]' "
-        L"or 'Searching your project files for that. [TOOL:search_files C:\\projects|error handling]'\n"
-        L"\n--- Browser Tasks ---\n"
-        L"For web searches: use [TOOL:search <query>] to open Google search results.\n"
-        L"For direct URLs: use [TOOL:browser_navigate <url>] to open a specific website.\n"
-        L"After opening a browser, give a natural response — do NOT call browser_content, browser_title, "
-        L"or browser_url repeatedly. The browser is now open and the user can see it. "
-        L"Just tell the user what you opened and stop. Do NOT loop waiting for page content.\n"
-        L"\n--- Task Planning ---\n"
-        L"For complex multi-step requests, start with a plan:\n"
-        L"[PLAN: step 1 description | step 2 description | step 3 description]\n"
-        L"Then execute each step in sequence, marking progress with [STEP: N/M: description].\n"
-        L"Example: [PLAN: Search for files | Read the main file | Summarize the architecture]\n"
-        L"The user will see your plan and step-by-step progress.\n"
-        L"\n--- Vision/OCR ---\n"
-        L"When you use screen_ocr, screen_capture, or screenshot tools, the result is processed\n"
-        L"with a dedicated vision model (Qwen3.6-35B-A3B) for image understanding.\n"
-        L"For text-based tasks you use DeepSeek-V4-Flash (fast and efficient).\n"
-        L"If the primary model is unavailable, a fallback model (MiniCPM5-1B) is used automatically.";
+        L"1. [TOOL:open <path>] — Open a file, folder, or URL.\n"
+        L"2. [TOOL:run <command>] — Execute a system command (notepad, calc, explorer).\n"
+        L"3. [TOOL:read <filepath>] — Read file contents.\n"
+        L"4. [TOOL:write <filepath> | <content>] — Write to a file.\n"
+        L"5. [TOOL:search <query>] — Open browser and search Google.\n"
+        L"6. [TOOL:cmd <command>] — Execute a shell command and return output.\n"
+        L"7. [TOOL:list_files <dirpath>] — List files/subdirs in a directory. Returns JSON.\n"
+        L"8. [TOOL:screenshot] — Take a screenshot.\n"
+        L"9. [TOOL:clipboard <text>] — Copy text to clipboard.\n"
+        L"10. [TOOL:volume <level>] — Set system volume (0-100).\n"
+        L"11. [TOOL:lock] — Lock workstation.\n"
+        L"12. [TOOL:notify <message>] — Show a notification.\n"
+        L"\n--- Screen & Window Tools ---\n"
+        L"13. [TOOL:screen_apps] — List ALL open application windows (Chrome tabs, apps, etc.).\n"
+        L"14. [TOOL:screen_active] — Get the currently focused/active application.\n"
+        L"15. [TOOL:screen_ocr] — Extract text from screen using OCR.\n"
+        L"16. [TOOL:screen_capture <path>] — Capture screen as image.\n"
+        L"17. [TOOL:ui_windows] — List all open UI windows.\n"
+        L"18. [TOOL:ui_search <text>] — Search UI elements by text.\n"
+        L"19. [TOOL:ui_click <element_id>] — Click a UI element.\n"
+        L"20. [TOOL:ui_type <text>] — Type text into focused element.\n"
+        L"\n--- Browser Tools ---\n"
+        L"21. [TOOL:browser_navigate <url>] — Open a URL in browser.\n"
+        L"22. [TOOL:browser_content] — Get current page text content.\n"
+        L"23. [TOOL:browser_links] — Get all links on current page.\n"
+        L"\n--- File Search & RAG Tools (call ONLY when needed) ---\n"
+        L"24. [TOOL:rag_search <query>] — Search synced folders for content.\n"
+        L"25. [TOOL:search_files <dirpath>|<query>] — Search text content in a directory.\n"
+        L"26. [TOOL:search_filename <dirpath>|<pattern>] — Search filenames by pattern.\n"
+        L"27. [TOOL:index <dirpath>] — Index a directory for searching.\n"
+        L"28. [TOOL:full_map <dirpath>] — Get JSON map of files and content.\n"
+        L"29. [TOOL:recall] — Load recent conversation memory.\n"
+        L"30. [TOOL:forget] — Clear conversation memory.\n"
+        L"\n--- Key Usage Notes ---\n"
+        L"- For 'what tabs are open': use [TOOL:screen_apps]\n"
+        L"- For 'list files in <folder>': use [TOOL:list_files <path>]\n"
+        L"- For web search: use [TOOL:search <query>]\n"
+        L"- After browser_navigate or search, just tell user what you opened — do NOT loop.\n"
+        L"- Do NOT auto-trigger RAG on simple messages. Only use RAG tools when user asks about files in synced folders.\n"
+        L"- If primary model is unavailable, fallback model (MiniCPM5-1B) is used automatically.";
 }
 
 void AgentClient::ClearHistory() {
@@ -265,39 +255,13 @@ std::wstring AgentClient::Chat(const std::wstring& userMessage) {
     // Add user message to history
     m_history.push_back({L"user", userMessage});
 
-    // ── Manual RAG: only runs if the user has synced a folder from Settings ──
-    // Uses modern hybrid pipeline: TF-IDF + BM25 + RRF fusion + reranking + contextual chunking
-    // Skipped entirely (no error, no overhead) if nothing has been synced.
-    if (argos_tools::rag_is_synced()) {
-        std::string utf8Query = WideToUtf8(userMessage);
-        std::string ragContext = argos_tools::rag_search_with_memory(utf8Query, "", 5);
-
-        // If RAG found relevant content, inject it as a system context message
-        // before the user's question (only if results are meaningful)
-        if (ragContext.find("No relevant files") == std::string::npos &&
-            ragContext.find("RAG search error") == std::string::npos &&
-            ragContext.find("RAG_NOT_SYNCED") == std::string::npos &&
-            ragContext.size() > 50) {
-            // Convert RAG context to wide string
-            int wlen = MultiByteToWideChar(CP_UTF8, 0, ragContext.c_str(),
-                                           (int)ragContext.size(), nullptr, 0);
-            if (wlen > 0) {
-                std::wstring wRagContext(wlen, 0);
-                MultiByteToWideChar(CP_UTF8, 0, ragContext.c_str(),
-                                   (int)ragContext.size(), &wRagContext[0], wlen);
-                // Add as a system context message before the user message
-                m_history.insert(m_history.end() - 1, {L"system",
-                    L"[Local Knowledge Context — Retrieved via RAG from your synced folders]\n" +
-                    wRagContext +
-                    L"\n[End of RAG Context] Use this information to help answer the user's question if relevant."});
-            }
-        }
-    }
+    // RAG is NOT auto-triggered. The AI agent will explicitly call RAG tools
+    // (rag_search, search_files, etc.) when it needs information from synced folders.
 
     std::wstring finalResponse;
 
     // Tool loop: AI may call tools, we execute them and send results back
-    for (int iteration = 0; iteration < 5; iteration++) {
+    for (int iteration = 0; iteration < 8; iteration++) {
         // Build full message list: system prompt + history
         std::vector<ChatMessage> messages;
         messages.push_back({L"system", m_systemPrompt});
@@ -417,8 +381,8 @@ std::wstring AgentClient::ChatWithModel(const std::vector<ChatMessage>& messages
                                      WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
     if (!hSession) return L"[Error: WinHttpOpen failed]";
 
-    // Set timeouts: 10s connect, 60s receive, 60s resolve (vision model can be slow)
-    WinHttpSetTimeouts(hSession, 30000, 10000, 60000, 60000);
+    // Set timeouts: 60s resolve, 60s connect, 120s send, 120s receive
+    WinHttpSetTimeouts(hSession, 60000, 60000, 120000, 120000);
 
     HINTERNET hConnect = WinHttpConnect(hSession, hostName, urlComp.nPort, 0);
     if (!hConnect) { WinHttpCloseHandle(hSession); return L"[Error: WinHttpConnect failed]"; }
@@ -615,17 +579,25 @@ std::wstring AgentClient::ChatWithMessagesStreamingModel(const std::vector<ChatM
 
     std::wstring fullUrl = m_serverUrl + L"/chat/completions";
     if (!WinHttpCrackUrl(fullUrl.c_str(), (DWORD)fullUrl.length(), 0, &urlComp)) {
+        LogError("Invalid server URL: " + WideToUtf8(fullUrl));
         return L"[Error: invalid server URL]";
     }
 
     HINTERNET hSession = WinHttpOpen(L"Argos/1.0", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
                                      WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0);
-    if (!hSession) return L"[Error: WinHttpOpen failed]";
+    if (!hSession) {
+        LogError("WinHttpOpen failed, error=" + std::to_string(GetLastError()));
+        return L"[Error: WinHttpOpen failed]";
+    }
 
-    WinHttpSetTimeouts(hSession, 30000, 10000, 120000, 120000);
+    WinHttpSetTimeouts(hSession, 60000, 60000, 120000, 120000);
 
     HINTERNET hConnect = WinHttpConnect(hSession, hostName, urlComp.nPort, 0);
-    if (!hConnect) { WinHttpCloseHandle(hSession); return L"[Error: WinHttpConnect failed]"; }
+    if (!hConnect) {
+        LogError("WinHttpConnect failed for host=" + WideToUtf8(hostName) + ", error=" + std::to_string(GetLastError()));
+        WinHttpCloseHandle(hSession);
+        return L"[Error: WinHttpConnect failed]";
+    }
 
     DWORD flags = (urlComp.nScheme == INTERNET_SCHEME_HTTPS) ? WINHTTP_FLAG_SECURE : 0;
     HINTERNET hRequest = WinHttpOpenRequest(hConnect, L"POST", urlPath,
@@ -640,18 +612,27 @@ std::wstring AgentClient::ChatWithMessagesStreamingModel(const std::vector<ChatM
     std::wstring headers = L"Authorization: Bearer " + m_apiKey + L"\r\n"
                            L"Content-Type: application/json\r\n";
 
-    BOOL bResult = WinHttpSendRequest(hRequest, headers.c_str(), (DWORD)headers.size(),
+    BOOL bResult = FALSE;
+    for (int attempt = 0; attempt < 3; attempt++) {
+        bResult = WinHttpSendRequest(hRequest, headers.c_str(), (DWORD)headers.size(),
                                        (LPVOID)bodyUtf8.data(), (DWORD)bodyUtf8.size(),
                                        (DWORD)bodyUtf8.size(), 0);
+        if (bResult) break;
+        Sleep(1000); // Wait 1s before retry
+    }
     if (!bResult) {
+        LogError("WinHttpSendRequest failed after 3 attempts, error=" + std::to_string(GetLastError()) +
+                 ", url=" + WideToUtf8(fullUrl) + ", model=" + WideToUtf8(model) +
+                 ", bodySize=" + std::to_string(bodyUtf8.size()));
         WinHttpCloseHandle(hRequest);
         WinHttpCloseHandle(hConnect);
         WinHttpCloseHandle(hSession);
-        return L"[Error: Could not send request]";
+        return L"[Error: Could not send request after 3 attempts. Check your network connection and API settings.]";
     }
 
     bResult = WinHttpReceiveResponse(hRequest, nullptr);
     if (!bResult) {
+        LogError("WinHttpReceiveResponse failed, error=" + std::to_string(GetLastError()));
         WinHttpCloseHandle(hRequest);
         WinHttpCloseHandle(hConnect);
         WinHttpCloseHandle(hSession);
@@ -704,6 +685,8 @@ std::wstring AgentClient::ChatWithMessagesStreamingModel(const std::vector<ChatM
 
     // If streaming returned nothing, fall back to non-streaming
     if (fullResponse.empty()) {
+        LogError("Empty streaming response from model=" + WideToUtf8(model) +
+                 ", url=" + WideToUtf8(m_serverUrl));
         return L"[Error: empty streaming response]";
     }
 
@@ -718,37 +701,43 @@ std::wstring AgentClient::ChatStreaming(const std::wstring& userMessage, StreamC
     // Add user message to history
     m_history.push_back({L"user", userMessage});
 
-    // Manual RAG with memory — only runs if user has synced a folder from Settings
-    if (argos_tools::rag_is_synced()) {
-        std::string utf8Query = WideToUtf8(userMessage);
-        std::string ragContext = argos_tools::rag_search_with_memory(utf8Query, "", 5);
+    // Save user message to persistent memory
+    argos_tools::rag_memory_save_conversation("user", WideToUtf8(userMessage));
 
-        if (ragContext.find("No relevant files") == std::string::npos &&
-            ragContext.find("RAG search error") == std::string::npos &&
-            ragContext.find("RAG_NOT_SYNCED") == std::string::npos &&
-            ragContext.size() > 50) {
-            int wlen = MultiByteToWideChar(CP_UTF8, 0, ragContext.c_str(),
-                                           (int)ragContext.size(), nullptr, 0);
+    // RAG is NOT auto-triggered here. The AI agent will explicitly call RAG tools
+    // (rag_search, search_files, etc.) when it needs information from synced folders.
+    // This prevents unnecessary RAG queries on simple messages like "hello".
+
+    std::wstring finalResponse;
+
+    // Load recent memory from persistent storage so AI has context from previous sessions
+    // Only load on first message, and limit to 5 messages to avoid context pollution
+    std::wstring memoryContext;
+    if (m_history.size() <= 1) {
+        std::string memory = argos_tools::rag_memory_load_conversation(5);
+        // Only inject if reasonable size (avoid polluting context with large/garbled memory)
+        if (memory.size() > 10 && memory.size() < 2000 && memory != "[]") {
+            int wlen = MultiByteToWideChar(CP_UTF8, 0, memory.c_str(),
+                                           (int)memory.size(), nullptr, 0);
             if (wlen > 0) {
-                std::wstring wRagContext(wlen, 0);
-                MultiByteToWideChar(CP_UTF8, 0, ragContext.c_str(),
-                                   (int)ragContext.size(), &wRagContext[0], wlen);
-                m_history.insert(m_history.end() - 1, {L"system",
-                    L"[Local Knowledge Context — Retrieved via RAG from your synced folders]\n" +
-                    wRagContext +
-                    L"\n[End of RAG Context] Use this information to help answer the user's question if relevant."});
+                std::wstring wMemory(wlen, 0);
+                MultiByteToWideChar(CP_UTF8, 0, memory.c_str(),
+                                   (int)memory.size(), &wMemory[0], wlen);
+                memoryContext = L"[Recent conversation memory from previous sessions]\n" +
+                    wMemory + L"\n[End of memory] Use this context if relevant.";
             }
         }
     }
 
-    std::wstring finalResponse;
-
     // Tool loop with streaming
-    for (int iteration = 0; iteration < 5; iteration++) {
+    for (int iteration = 0; iteration < 8; iteration++) {
         if (m_abort.load()) break;
 
         std::vector<ChatMessage> messages;
         messages.push_back({L"system", m_systemPrompt});
+        if (iteration == 0 && !memoryContext.empty()) {
+            messages.push_back({L"system", memoryContext});
+        }
         for (const auto& msg : m_history) {
             messages.push_back(msg);
         }
@@ -761,11 +750,17 @@ std::wstring AgentClient::ChatStreaming(const std::wstring& userMessage, StreamC
             finalResponse = ChatWithMessages(messages);
         }
 
+        // Log iteration for debugging
+        LogError("ChatStreaming iteration=" + std::to_string(iteration) +
+                 ", hasToolTags=" + (HasToolTags(finalResponse) ? "true" : "false") +
+                 ", responseLen=" + std::to_string(finalResponse.size()));
+
         if (!HasToolTags(finalResponse)) {
             break;
         }
 
         std::wstring toolResults = ExecuteTools(finalResponse);
+        LogError("Tool results: " + WideToUtf8(toolResults.substr(0, 200)));
         m_history.push_back({L"assistant", finalResponse});
 
         // If browser/search tools were called, break early — browser is open, no need to loop
@@ -777,6 +772,11 @@ std::wstring AgentClient::ChatStreaming(const std::wstring& userMessage, StreamC
         }
 
         m_history.push_back({L"system", L"[Tool Results]\n" + toolResults});
+
+        // Add a user message prompting the AI to use the tool results
+        m_history.push_back({L"user", L"Based on the tool results above, please give me a clear, natural answer. "
+            L"Do NOT repeat the raw data. Just tell me what I asked in a friendly way. "
+            L"If you need more information, call another tool — but do NOT say 'let me check' without including a tool tag."});
 
         if (m_history.size() > 30) {
             m_history.erase(m_history.begin(), m_history.begin() + (m_history.size() - 30));
@@ -1041,6 +1041,37 @@ std::wstring AgentClient::ExecuteTools(const std::wstring& response) {
             }
             ShellExecuteW(nullptr, L"open", url.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
             results += L"Search opened in browser: " + toolArg + L"\n";
+        }
+        else if (toolLower == L"cmd" || toolLower == L"command" || toolLower == L"shell") {
+            // Execute a shell command and capture output
+            std::string utf8Cmd = WideToUtf8(toolArg);
+            std::string cmdOutput;
+            FILE* pipe = _popen(("2>&1 " + utf8Cmd).c_str(), "r");
+            if (pipe) {
+                char buf[4096];
+                while (fgets(buf, sizeof(buf), pipe)) {
+                    cmdOutput += buf;
+                }
+                _pclose(pipe);
+            }
+            if (cmdOutput.empty()) {
+                results += L"Command executed (no output).\n";
+            } else {
+                // Convert output to wide string
+                int wlen = MultiByteToWideChar(CP_UTF8, 0, cmdOutput.c_str(),
+                                               (int)cmdOutput.size(), nullptr, 0);
+                if (wlen > 0) {
+                    std::wstring wOutput(wlen, 0);
+                    MultiByteToWideChar(CP_UTF8, 0, cmdOutput.c_str(),
+                                       (int)cmdOutput.size(), &wOutput[0], wlen);
+                    // Truncate very long output
+                    if (wOutput.size() > 3000) wOutput = wOutput.substr(0, 3000) + L"...(truncated)";
+                    results += wOutput + L"\n";
+                } else {
+                    // Fallback: try as ANSI
+                    results += std::wstring(cmdOutput.begin(), cmdOutput.end()) + L"\n";
+                }
+            }
         }
         else if (toolLower == L"lock") {
             // Permission check: ask user before locking workstation

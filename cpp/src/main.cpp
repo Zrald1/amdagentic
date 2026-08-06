@@ -20,6 +20,7 @@
 #include <richedit.h>
 #include <random>
 #include <chrono>
+#include <ctime>
 
 #pragma comment(lib, "comctl32.lib")
 
@@ -245,6 +246,7 @@ static std::mutex g_streamingMutex;      // Protects g_streamingPartial (written
 // Loading animation timer
 #define IDT_LOADING 1002
 static int g_loadingDots = 0;
+static int g_loadingTickCount = 0; // Watchdog: counts loading timer ticks (300ms each)
 // Track where the thinking indicator starts in the Rich Edit (for in-place updates)
 static LRESULT g_thinkingStartPos = -1;
 
@@ -308,6 +310,7 @@ static void RefreshConversation(HWND hwnd) {
     cfArgosLabel.dwEffects = CFE_BOLD;
     cfArgosLabel.crTextColor = RGB(0, 120, 215);     // blue
     cfArgosLabel.crBackColor = RGB(240, 240, 240);   // light gray
+    cfArgosLabel.yHeight = 200; // 10pt — ensure label size is set explicitly
 
     // ── Thinking format: gray italic ──
     CHARFORMAT2W cfThink = {};
@@ -377,7 +380,7 @@ static void RefreshConversation(HWND hwnd) {
 
         // Animated thinking text
         SendMessageW(hConvo, EM_SETCHARFORMAT, SCF_SELECTION, (LPARAM)&cfThink);
-        const wchar_t* dots[] = { L"○ ○ ○", L"● ○ ○", L"○ ● ○", L"○ ○ ●" };
+        const wchar_t* dots[] = { L".  .  .", L"*  .  .", L".  *  .", L".  .  *" };
         std::wstring thinking = L"Thinking " + std::wstring(dots[g_loadingDots % 4]) + L"\r\n";
         SendMessageW(hConvo, EM_REPLACESEL, FALSE, (LPARAM)thinking.c_str());
     }
@@ -439,7 +442,7 @@ static void UpdateThinkingDots(HWND hwnd) {
     cfThink.crBackColor = RGB(240, 240, 240);
     SendMessageW(hConvo, EM_SETCHARFORMAT, SCF_SELECTION, (LPARAM)&cfThink);
 
-    const wchar_t* dots[] = { L"○ ○ ○", L"● ○ ○", L"○ ● ○", L"○ ○ ●" };
+    const wchar_t* dots[] = { L".  .  .", L"*  .  .", L".  *  .", L".  .  *" };
     std::wstring thinkText = L"Thinking " + std::wstring(dots[g_loadingDots % 4]) + L"\r\n";
     SendMessageW(hConvo, EM_REPLACESEL, FALSE, (LPARAM)thinkText.c_str());
 
@@ -894,7 +897,18 @@ static LRESULT CALLBACK BubbleWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
         case WM_COMMAND: {
             switch (LOWORD(wParam)) {
                 case IDC_BUBBLE_SEND: {
-                    if (g_chatInProgress.load()) return 0;
+                    if (g_chatInProgress.load()) {
+                        // Cancel the in-progress chat and start the new one
+                        if (g_agent) g_agent->m_abort.store(true);
+                        KillTimer(hwnd, IDT_LOADING);
+                        g_chatInProgress.store(false);
+                        // Remove the incomplete chat entry (empty assistant response)
+                        if (!g_chatHistory.empty() && g_chatHistory.back().assistantMsg.empty()) {
+                            g_chatHistory.pop_back();
+                        }
+                        // Small delay to let the aborted thread clean up
+                        Sleep(100);
+                    }
 
                     // Apply settings from the settings fields before sending
                     if (g_agent) {
@@ -920,6 +934,7 @@ static LRESULT CALLBACK BubbleWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
                         EnableWindow(GetDlgItem(hwnd, IDC_BUBBLE_SEND), FALSE);
                         SetTimer(hwnd, IDT_LOADING, 300, nullptr);
                         g_thinkingStartPos = -1; // reset for new thinking indicator
+                        g_loadingTickCount = 0; // reset watchdog
 
                         // Set robot to thinking state
                         if (g_renderer) g_renderer->SetThinking(true);
@@ -941,16 +956,41 @@ static LRESULT CALLBACK BubbleWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
                                 std::lock_guard<std::mutex> lock(g_streamingMutex);
                                 g_streamingPartial.clear();
                             }
-                            g_pendingResponse = g_agent->ChatStreaming(g_lastUserMsg,
-                                [hwnd](const std::wstring& delta) -> bool {
-                                    {
-                                        std::lock_guard<std::mutex> lock(g_streamingMutex);
-                                        g_streamingPartial += delta;
-                                    }
-                                    PostMessageW(hwnd, WM_CHAT_STREAM, 0, 0);
-                                    return true; // continue streaming
-                                });
-                            PostMessageW(hwnd, WM_CHAT_RESPONSE, 0, 0);
+                            std::wstring response;
+                            try {
+                                response = g_agent->ChatStreaming(g_lastUserMsg,
+                                    [hwnd](const std::wstring& delta) -> bool {
+                                        {
+                                            std::lock_guard<std::mutex> lock(g_streamingMutex);
+                                            g_streamingPartial += delta;
+                                        }
+                                        PostMessageW(hwnd, WM_CHAT_STREAM, 0, 0);
+                                        return !g_agent->m_abort.load(); // abort if requested
+                                    });
+                            } catch (const std::exception& e) {
+                                // Log error to file
+                                FILE* logFile = nullptr;
+                                fopen_s(&logFile, "argos_error.log", "a");
+                                if (logFile) {
+                                    time_t now = time(nullptr);
+                                    struct tm tm_buf;
+                                    localtime_s(&tm_buf, &now);
+                                    char timeBuf[64];
+                                    strftime(timeBuf, sizeof(timeBuf), "%Y-%m-%d %H:%M:%S", &tm_buf);
+                                    fprintf(logFile, "[%s] ChatStreaming exception: %s\n", timeBuf, e.what());
+                                    fclose(logFile);
+                                }
+                                response = L"[Error: Chat failed with exception: " +
+                                    std::wstring(e.what(), e.what() + strlen(e.what())) + L"]";
+                            } catch (...) {
+                                response = L"[Error: Chat failed with unknown exception]";
+                            }
+                            g_pendingResponse = response;
+                            if (g_agent->m_abort.load()) {
+                                PostMessageW(hwnd, WM_CHAT_ERROR, 0, 0);
+                            } else {
+                                PostMessageW(hwnd, WM_CHAT_RESPONSE, 0, 0);
+                            }
                         }).detach();
                     }
                     return 0;
@@ -1047,11 +1087,22 @@ static LRESULT CALLBACK BubbleWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
                 case IDC_BUBBLE_EXPAND: {
                     g_expanded = !g_expanded;
                     if (g_expanded) {
+                        // Expand anchored to robot position — not centered on screen
+                        RECT rcRobot;
+                        HWND hRobot = GetParent(hwnd);
+                        if (hRobot) GetWindowRect(hRobot, &rcRobot);
+                        else { rcRobot.left = 100; rcRobot.right = 200; rcRobot.top = 200; rcRobot.bottom = 300; }
                         int screenW = GetSystemMetrics(SM_CXSCREEN);
                         int screenH = GetSystemMetrics(SM_CYSCREEN);
-                        int newW = screenW / 2;
-                        int newH = screenH / 2;
-                        SetWindowPos(hwnd, HWND_TOPMOST, 20, 20, newW, newH, SWP_SHOWWINDOW);
+                        int newW = 580, newH = 500;
+                        int newX = rcRobot.left + (rcRobot.right - rcRobot.left) / 2 - newW / 2;
+                        int newY = rcRobot.top - newH + 15;
+                        if (newY < 0) newY = rcRobot.bottom + 10;
+                        // Clamp X to screen edges
+                        if (newX < 4) newX = 4;
+                        if (newX + newW > screenW - 4) newX = screenW - newW - 4;
+                        if (newY + newH > screenH - 4) newY = screenH - newH - 4;
+                        SetWindowPos(hwnd, HWND_TOPMOST, newX, newY, newW, newH, SWP_SHOWWINDOW);
                         g_btnData[4].label = L"Shrink";
                     } else {
                         g_btnData[4].label = L"Expand";
@@ -1094,6 +1145,35 @@ static LRESULT CALLBACK BubbleWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
         case WM_TIMER: {
             if (wParam == IDT_LOADING) {
                 g_loadingDots = (g_loadingDots + 1) % 4;
+                g_loadingTickCount++;
+
+                // Watchdog: if thinking for >120 seconds (400 ticks * 300ms), auto-cancel
+                if (g_loadingTickCount > 400) {
+                    KillTimer(hwnd, IDT_LOADING);
+                    g_chatInProgress.store(false);
+                    EnableWindow(GetDlgItem(hwnd, IDC_BUBBLE_SEND), TRUE);
+                    if (g_agent) g_agent->m_abort.store(true);
+                    if (!g_chatHistory.empty()) {
+                        g_chatHistory.back().assistantMsg = L"Sorry, the request timed out. Please try again.";
+                    }
+                    // Log timeout
+                    FILE* logFile = nullptr;
+                    fopen_s(&logFile, "argos_error.log", "a");
+                    if (logFile) {
+                        time_t now = time(nullptr);
+                        struct tm tm_buf;
+                        localtime_s(&tm_buf, &now);
+                        char timeBuf[64];
+                        strftime(timeBuf, sizeof(timeBuf), "%Y-%m-%d %H:%M:%S", &tm_buf);
+                        fprintf(logFile, "[%s] WATCHDOG: Chat timed out after 120 seconds\n", timeBuf);
+                        fclose(logFile);
+                    }
+                    RefreshConversation(hwnd);
+                    SetFocus(GetDlgItem(hwnd, IDC_BUBBLE_EDIT));
+                    if (g_renderer) g_renderer->SetThinking(false);
+                    return 0;
+                }
+
                 // Only update the thinking dots, NOT rebuild the whole conversation
                 // This preserves scroll position when user is reading history
                 UpdateThinkingDots(hwnd);
@@ -1147,8 +1227,31 @@ static LRESULT CALLBACK BubbleWndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
             KillTimer(hwnd, IDT_LOADING);
             g_chatInProgress.store(false);
             EnableWindow(GetDlgItem(hwnd, IDC_BUBBLE_SEND), TRUE);
+            // If this was a user-initiated abort (new message), don't show error
+            if (g_agent && g_agent->m_abort.load()) {
+                // Just clear thinking state — new chat is already starting
+                if (g_renderer) g_renderer->SetThinking(false);
+                return 0;
+            }
+            std::wstring errResponse = g_pendingResponse;
+            if (errResponse.empty()) errResponse = L"Error: Could not reach AI server.";
             if (!g_chatHistory.empty()) {
-                g_chatHistory.back().assistantMsg = L"Error: Could not reach AI server.";
+                g_chatHistory.back().assistantMsg = errResponse;
+            }
+            // Log error to file
+            FILE* logFile = nullptr;
+            fopen_s(&logFile, "argos_error.log", "a");
+            if (logFile) {
+                time_t now = time(nullptr);
+                struct tm tm_buf;
+                localtime_s(&tm_buf, &now);
+                char timeBuf[64];
+                strftime(timeBuf, sizeof(timeBuf), "%Y-%m-%d %H:%M:%S", &tm_buf);
+                std::string utf8Err;
+                int elen = WideCharToMultiByte(CP_UTF8, 0, errResponse.c_str(), (int)errResponse.size(), nullptr, 0, nullptr, nullptr);
+                if (elen > 0) { utf8Err.resize(elen); WideCharToMultiByte(CP_UTF8, 0, errResponse.c_str(), (int)errResponse.size(), &utf8Err[0], elen, nullptr, nullptr); }
+                fprintf(logFile, "[%s] WM_CHAT_ERROR: %s\n", timeBuf, utf8Err.c_str());
+                fclose(logFile);
             }
             RefreshConversation(hwnd);
             SetFocus(GetDlgItem(hwnd, IDC_BUBBLE_EDIT));
@@ -1380,24 +1483,55 @@ static void ShowProactiveBubble(HWND robotHwnd, const std::wstring& message) {
         registered = true;
     }
 
-    // Calculate bubble size based on message length — LARGER for readability
-    int msgLen = (int)message.size();
+    // Auto-adjust bubble size based on actual text measurement
     int bubbleW = 380;
-    int bubbleH = 140;  // Minimum: 8 top + 32 label + 60 text + 22 tail + 18 padding
-    if (msgLen > 60)  { bubbleW = 420; bubbleH = 170; }
-    if (msgLen > 120) { bubbleW = 460; bubbleH = 200; }
-    if (msgLen > 200) { bubbleW = 500; bubbleH = 240; }
+    int bubbleH = 140;  // Minimum height
+
+    // Measure text to determine needed height
+    HDC screenDC = GetDC(nullptr);
+    HFONT measureFont = CreateFontW(24, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE,
+        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+        CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI Semibold");
+    HFONT oldFont = (HFONT)SelectObject(screenDC, measureFont);
+
+    // Available text width (bubble width - padding - margins)
+    int textAvailW = bubbleW - 16 - 28;  // bL(8) + left margin(14) + right margin(14) + bR(8) - correction
+    RECT measureRect = {0, 0, textAvailW, 0};
+    DrawTextW(screenDC, message.c_str(), (int)message.size(),
+             &measureRect, DT_LEFT | DT_WORDBREAK | DT_TOP | DT_CALCRECT);
+    int textH = measureRect.bottom - measureRect.top;
+
+    SelectObject(screenDC, oldFont);
+    DeleteObject(measureFont);
+    ReleaseDC(nullptr, screenDC);
+
+    // Calculate bubble height: padding + label(32) + text + tail(22) + margins
+    int neededH = 8 + 36 + textH + 22 + 12;  // top pad + label area + text + tail + bottom pad
+    bubbleH = (std::max)(neededH, 140);
+
+    // Widen bubble if text is very long
+    int msgLen = (int)message.size();
+    if (msgLen > 80)  { bubbleW = 420; }
+    if (msgLen > 160) { bubbleW = 460; }
+    if (msgLen > 250) { bubbleW = 500; }
+
+    // Cap height to reasonable max
+    if (bubbleH > 320) bubbleH = 320;
 
     // Position above the robot — clamp to screen edges for readability
     RECT rc;
     GetWindowRect(robotHwnd, &rc);
     int screenW = GetSystemMetrics(SM_CXSCREEN);
+    int screenH = GetSystemMetrics(SM_CYSCREEN);
     int x = rc.left + (rc.right - rc.left) / 2 - bubbleW / 2;
     int y = rc.top - bubbleH + 10;
     if (y < 0) y = rc.bottom + 10;
     // Clamp X to keep entire bubble visible on screen
     if (x < 4) x = 4;
     if (x + bubbleW > screenW - 4) x = screenW - bubbleW - 4;
+    // Clamp Y to keep entire bubble visible on screen
+    if (y + bubbleH > screenH - 4) y = screenH - bubbleH - 4;
+    if (y < 4) y = 4;
 
     g_proactiveBubble = CreateWindowExW(
         WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
@@ -1531,14 +1665,22 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 // Keep manga bubble positioned above the robot
                 UpdateBubblePosition(hwnd);
 
-                // Keep proactive bubble positioned above robot too
+                // Keep proactive bubble positioned above robot too — with full screen clamping
                 if (g_proactiveBubble) {
                     RECT rc; GetWindowRect(hwnd, &rc);
                     RECT brc; GetWindowRect(g_proactiveBubble, &brc);
                     int bw = brc.right - brc.left, bh = brc.bottom - brc.top;
+                    int screenW2 = GetSystemMetrics(SM_CXSCREEN);
+                    int screenH2 = GetSystemMetrics(SM_CYSCREEN);
                     int x = rc.left + (rc.right - rc.left) / 2 - bw / 2;
                     int y = rc.top - bh + 10;
                     if (y < 0) y = rc.bottom + 10;
+                    // Clamp X to screen edges
+                    if (x < 4) x = 4;
+                    if (x + bw > screenW2 - 4) x = screenW2 - bw - 4;
+                    // Clamp Y to screen edges
+                    if (y + bh > screenH2 - 4) y = screenH2 - bh - 4;
+                    if (y < 4) y = 4;
                     SetWindowPos(g_proactiveBubble, HWND_TOPMOST, x, y, 0, 0,
                                  SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
                 }

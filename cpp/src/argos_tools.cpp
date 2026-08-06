@@ -845,6 +845,37 @@ std::string dispatch_tool(const std::string& tool_name, const std::string& args)
         return ui_export_map();
     }
 
+    if (tool_name == "list_files" || tool_name == "dir" || tool_name == "ls") {
+        // List files in a directory
+        std::string dir_path = args;
+        if (dir_path.empty()) dir_path = ".";
+        std::ostringstream json;
+        json << "{\"directory\":\"" << dir_path << "\",\"files\":[";
+        try {
+            fs::path p(dir_path);
+            if (!fs::exists(p) || !fs::is_directory(p)) {
+                json << "],\"error\":\"Directory does not exist: " << dir_path << "\"}";
+                return json.str();
+            }
+            bool first = true;
+            for (const auto& entry : fs::directory_iterator(p)) {
+                if (!first) json << ",";
+                first = false;
+                json << "{\"name\":\"" << entry.path().filename().string() << "\"";
+                json << ",\"type\":\"" << (entry.is_directory() ? "directory" : "file") << "\"";
+                if (entry.is_regular_file()) {
+                    json << ",\"size\":" << (long long)entry.file_size();
+                }
+                json << "}";
+            }
+        } catch (const std::exception& e) {
+            json << "],\"error\":\"" << e.what() << "\"}";
+            return json.str();
+        }
+        json << "]}";
+        return json.str();
+    }
+
     if (tool_name == "rag" || tool_name == "rag_search") {
         return rag_search_with_memory(args);
     }

@@ -91,6 +91,14 @@ static void renderLoop() {
 
         g_robot.update(dt);
 
+        // Check for tap events and notify Java
+        if (g_robot.consumeHeadTap()) {
+            callJavaMethod("onHeadTap", "()V", "");
+        }
+        if (g_robot.consumeBodyTap()) {
+            callJavaMethod("onBodyTap", "()V", "");
+        }
+
         // Clear and render
         glClearColor(0.05f, 0.05f, 0.08f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);

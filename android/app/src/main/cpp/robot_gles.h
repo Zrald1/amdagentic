@@ -23,7 +23,8 @@ public:
     void setThinking(bool thinking) { m_thinking = thinking; }
     void setTalking(bool talking) { m_talking = talking; }
     void onTouch(float x, float y, int action);
-    void setSpeechText(const std::string& text) { m_speechText = text; m_speechTime = 0; }
+    bool consumeHeadTap();
+    bool consumeBodyTap();
 
 private:
     EglRenderer* m_renderer = nullptr;
@@ -46,11 +47,6 @@ private:
     float m_walkSpeed = 150.0f;
     bool m_facingRight = true;
 
-    // Speech bubble
-    std::string m_speechText;
-    float m_speechTime = 999.0f; // >5 means hidden
-    bool m_speechVisible = false;
-
     // Spin state
     float m_spinTimer = 0.0f;
     float m_spinDuration = 1.0f;
@@ -60,6 +56,8 @@ private:
     float m_touchStartX = 0;
     float m_touchStartY = 0;
     bool m_touchDown = false;
+    bool m_headTapped = false;
+    bool m_bodyTapped = false;
 
     void setState(AndroidRobotState state, float duration);
     void pickNextBehavior();
@@ -73,7 +71,6 @@ private:
     void drawArm(float cx, float cy, float bob, bool left, float waveAngle);
     void drawGroundShadow(float cx, float baseY, float w);
     void drawSpartanCrest(float cx, float headY);
-    void drawSpeechBubble(float cx, float cy);
     void drawThinkingDots(float cx, float cy);
     void drawSpinningArms(float cx, float cy, float bob, float spinAngle);
     float computeWalkLean();

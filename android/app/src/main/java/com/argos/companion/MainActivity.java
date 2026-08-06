@@ -2,18 +2,18 @@ package com.argos.companion;
 
 import android.app.Activity;
 import android.os.Bundle;
+import android.view.Gravity;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
 import android.view.View;
+import android.view.ViewGroup;
 import android.widget.EditText;
 import android.widget.ImageButton;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
-import android.view.ViewGroup;
 import android.graphics.Color;
 import android.text.TextUtils;
-import android.widget.Toast;
 
 public class MainActivity extends Activity implements SurfaceHolder.Callback {
 
@@ -22,8 +22,10 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
     private ImageButton sendBtn;
     private LinearLayout convoLayout;
     private ScrollView convoScroll;
+    private LinearLayout bubbleOverlay;
     private boolean chatInProgress = false;
     private boolean nativeReady = false;
+    private boolean bubbleVisible = false;
 
     static {
         System.loadLibrary("argos");
@@ -33,32 +35,77 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
-        LinearLayout root = new LinearLayout(this);
-        root.setOrientation(LinearLayout.VERTICAL);
-        root.setBackgroundColor(Color.BLACK);
-
-        // SurfaceView for the robot rendering (takes ~60% of screen)
+        // Full-screen SurfaceView — robot walks here
         surfaceView = new SurfaceView(this);
-        LinearLayout.LayoutParams surfaceParams = new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, 0, 6f);
-        root.addView(surfaceView, surfaceParams);
+        setContentView(surfaceView);
+
+        // Speech bubble overlay — hidden by default, shown when head is tapped
+        createSpeechBubble();
+
+        // Register for surface callbacks — nativeInit will be called
+        // when the surface is actually created
+        surfaceView.getHolder().addCallback(this);
+
+        // Forward touch events to native renderer
+        surfaceView.setOnTouchListener((v, event) -> {
+            float x = event.getX();
+            float y = event.getY();
+            int action = event.getActionMasked();
+            if (action == android.view.MotionEvent.ACTION_DOWN) {
+                nativeOnTouch(x, y, 0);
+            } else if (action == android.view.MotionEvent.ACTION_UP) {
+                nativeOnTouch(x, y, 1);
+            } else if (action == android.view.MotionEvent.ACTION_MOVE) {
+                nativeOnTouch(x, y, 2);
+            }
+            return true;
+        });
+    }
+
+    private void createSpeechBubble() {
+        bubbleOverlay = new LinearLayout(this);
+        bubbleOverlay.setOrientation(LinearLayout.VERTICAL);
+        bubbleOverlay.setBackgroundColor(Color.rgb(25, 25, 30));
+        bubbleOverlay.setPadding(28, 24, 28, 24);
+        bubbleOverlay.setVisibility(View.GONE);
+
+        // Title bar — "Ask Argos" in neon blue
+        TextView title = new TextView(this);
+        title.setText("Ask Argos");
+        title.setTextColor(Color.rgb(0, 200, 255));
+        title.setTextSize(20f);
+        title.setPadding(0, 0, 0, 16);
+        title.setGravity(Gravity.CENTER);
+        bubbleOverlay.addView(title);
+
+        // Neon blue divider
+        View divider = new View(this);
+        divider.setBackgroundColor(Color.rgb(0, 180, 255));
+        LinearLayout.LayoutParams divParams = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, 3);
+        divParams.bottomMargin = 16;
+        bubbleOverlay.addView(divider, divParams);
 
         // Conversation scroll area
         convoScroll = new ScrollView(this);
-        LinearLayout.LayoutParams scrollParams = new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, 0, 3f);
         convoScroll.setBackgroundColor(Color.rgb(20, 20, 25));
+        LinearLayout.LayoutParams scrollParams = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f);
         convoLayout = new LinearLayout(this);
         convoLayout.setOrientation(LinearLayout.VERTICAL);
-        convoLayout.setPadding(24, 24, 24, 24);
+        convoLayout.setPadding(20, 20, 20, 20);
         convoScroll.addView(convoLayout);
-        root.addView(convoScroll, scrollParams);
+        bubbleOverlay.addView(convoScroll, scrollParams);
 
         // Input bar
         LinearLayout inputBar = new LinearLayout(this);
         inputBar.setOrientation(LinearLayout.HORIZONTAL);
         inputBar.setBackgroundColor(Color.rgb(30, 30, 35));
-        inputBar.setPadding(16, 12, 16, 12);
+        inputBar.setPadding(12, 12, 12, 12);
+        LinearLayout.LayoutParams inputBarParams = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        inputBarParams.topMargin = 12;
+        bubbleOverlay.addView(inputBar, inputBarParams);
 
         inputEdit = new EditText(this);
         inputEdit.setHint("Message Argos...");
@@ -79,36 +126,48 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
         btnParams.setMargins(12, 0, 0, 0);
         inputBar.addView(sendBtn, btnParams);
 
-        LinearLayout.LayoutParams inputParams = new LinearLayout.LayoutParams(
-            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
-        root.addView(inputBar, inputParams);
-
-        setContentView(root);
-
-        // Register for surface callbacks — nativeInit will be called
-        // when the surface is actually created
-        surfaceView.getHolder().addCallback(this);
-
-        // Forward touch events to native renderer
-        surfaceView.setOnTouchListener((v, event) -> {
-            float x = event.getX();
-            float y = event.getY();
-            int action = event.getActionMasked();
-            // Map Android action constants: DOWN=0, UP=1, MOVE=2
-            if (action == android.view.MotionEvent.ACTION_DOWN) {
-                nativeOnTouch(x, y, 0);
-            } else if (action == android.view.MotionEvent.ACTION_UP) {
-                nativeOnTouch(x, y, 1);
-            } else if (action == android.view.MotionEvent.ACTION_MOVE) {
-                nativeOnTouch(x, y, 2);
-            }
-            return true;
-        });
-
         sendBtn.setOnClickListener(v -> sendMessage());
         inputEdit.setOnEditorActionListener((v, actionId, event) -> {
             sendMessage();
             return true;
+        });
+
+        // Add bubble as overlay on top of SurfaceView
+        android.widget.FrameLayout root = new android.widget.FrameLayout(this);
+        root.addView(surfaceView, new android.widget.FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+
+        // Position bubble in upper portion of screen
+        android.widget.FrameLayout.LayoutParams bubbleParams = new android.widget.FrameLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        bubbleParams.gravity = Gravity.TOP;
+        bubbleParams.setMargins(40, 60, 40, 0);
+        root.addView(bubbleOverlay, bubbleParams);
+
+        setContentView(root);
+    }
+
+    // Called from C++ via JNI when robot head is tapped
+    public void onHeadTap() {
+        runOnUiThread(() -> {
+            if (bubbleVisible) {
+                bubbleOverlay.setVisibility(View.GONE);
+                bubbleVisible = false;
+            } else {
+                bubbleOverlay.setVisibility(View.VISIBLE);
+                bubbleVisible = true;
+                if (inputEdit != null) inputEdit.requestFocus();
+            }
+        });
+    }
+
+    // Called from C++ via JNI when robot body is tapped (walk)
+    public void onBodyTap() {
+        runOnUiThread(() -> {
+            if (bubbleVisible) {
+                bubbleOverlay.setVisibility(View.GONE);
+                bubbleVisible = false;
+            }
         });
     }
 
@@ -121,10 +180,7 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
         inputEdit.setText("");
         sendBtn.setEnabled(false);
 
-        // Add user message to conversation
         addMessage("You: " + text, Color.rgb(200, 200, 210));
-
-        // Send to AI via native code
         nativeSendChat(text);
     }
 
@@ -161,7 +217,6 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
     // Called from C++ via JNI
     public void onChatStream(final String delta) {
         runOnUiThread(() -> {
-            // Update last Argos message or create new one
             int count = convoLayout.getChildCount();
             if (count > 0) {
                 View last = convoLayout.getChildAt(count - 1);
@@ -200,21 +255,17 @@ public class MainActivity extends Activity implements SurfaceHolder.Callback {
     // SurfaceHolder.Callback
     @Override
     public void surfaceCreated(SurfaceHolder holder) {
-        // Surface is now valid — safe to initialize native renderer
         nativeInit(surfaceView);
         nativeReady = true;
     }
 
     @Override
     public void surfaceChanged(SurfaceHolder holder, int format, int width, int height) {
-        // Pass through to native if needed
     }
 
     @Override
     public void surfaceDestroyed(SurfaceHolder holder) {
         nativeReady = false;
-        // Stop render thread and release EGL resources
-        // nativeInit will be called again when surface is recreated
         nativeDestroy();
     }
 

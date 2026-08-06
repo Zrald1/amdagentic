@@ -138,15 +138,102 @@ public class ArgosAccessibilityService extends AccessibilityService {
         return null;
     }
 
-    // Get friendly app name from package
+    // Get friendly app name from package — never returns raw package name
     private String getAppLabel(String pkg) {
+        // First try PackageManager
         try {
             android.content.pm.PackageManager pm = getPackageManager();
             android.content.pm.ApplicationInfo ai = pm.getApplicationInfo(pkg, 0);
-            return (String) pm.getApplicationLabel(ai);
+            String label = (String) pm.getApplicationLabel(ai);
+            if (label != null && !label.isEmpty() && !label.equals(pkg)) {
+                return label;
+            }
         } catch (Exception e) {
-            return pkg;
+            // Fall through to extraction
         }
+
+        // Fallback: extract a clean name from the package name
+        // e.g. "com.whatsapp" -> "WhatsApp", "com.instagram.android" -> "Instagram"
+        return cleanPackageName(pkg);
+    }
+
+    // Extract a human-readable name from a package name
+    private static String cleanPackageName(String pkg) {
+        if (pkg == null || pkg.isEmpty()) return "Unknown";
+
+        // Split by dot and take the most meaningful part
+        String[] parts = pkg.split("\\.");
+        // Skip common prefixes: com, org, net, io, app, android, google, samsung, miui, etc.
+        java.util.Set<String> skip = new java.util.HashSet<>(java.util.Arrays.asList(
+            "com", "org", "net", "io", "app", "android", "google", "samsung",
+            "miui", "huawei", "xiaomi", "oppo", "vivo", "realme", "lge", "motorola",
+            "amazon", "facebook", "microsoft", "adobe", "intellij", "jetbrains",
+            "whatsapp", "llc", "inc", "co", "uk", "cn", "de", "fr", "jp", "kr",
+            "the", "my", "mobile", "app", "application", "client", "lite", "web"
+        ));
+
+        String bestPart = "";
+        for (int i = parts.length - 1; i >= 0; i--) {
+            String part = parts[i].toLowerCase();
+            if (!skip.contains(part) && part.length() >= 2) {
+                bestPart = parts[i];
+                break;
+            }
+        }
+
+        if (bestPart.isEmpty() && parts.length > 0) {
+            bestPart = parts[parts.length - 1];
+        }
+
+        // Capitalize first letter
+        if (bestPart.length() > 0) {
+            bestPart = bestPart.substring(0, 1).toUpperCase() + bestPart.substring(1);
+        }
+
+        // Fix common known apps
+        String lower = pkg.toLowerCase();
+        if (lower.contains("whatsapp")) return "WhatsApp";
+        if (lower.contains("instagram")) return "Instagram";
+        if (lower.contains("facebook") || lower.contains("fbandroid")) return "Facebook";
+        if (lower.contains("messenger") || lower.contains("orca")) return "Messenger";
+        if (lower.contains("twitter") || lower.contains("com.twitter.android")) return "Twitter";
+        if (lower.contains("tiktok") || lower.contains("musical")) return "TikTok";
+        if (lower.contains("snapchat")) return "Snapchat";
+        if (lower.contains("telegram")) return "Telegram";
+        if (lower.contains("chrome")) return "Chrome";
+        if (lower.contains("firefox")) return "Firefox";
+        if (lower.contains("youtube")) return "YouTube";
+        if (lower.contains("gmail") || lower.contains("google.android.gm")) return "Gmail";
+        if (lower.contains("spotify")) return "Spotify";
+        if (lower.contains("netflix")) return "Netflix";
+        if (lower.contains("discord")) return "Discord";
+        if (lower.contains("reddit")) return "Reddit";
+        if (lower.contains("amazon.mShop")) return "Amazon";
+        if (lower.contains("paypal")) return "PayPal";
+        if (lower.contains("linkedin")) return "LinkedIn";
+        if (lower.contains("zoom")) return "Zoom";
+        if (lower.contains("teams")) return "Teams";
+        if (lower.contains("slack")) return "Slack";
+        if (lower.contains("chrome")) return "Chrome";
+        if (lower.contains("browser") || lower.contains("org.mozilla.firefox")) return "Browser";
+        if (lower.contains("settings")) return "Settings";
+        if (lower.contains("calculator")) return "Calculator";
+        if (lower.contains("calendar")) return "Calendar";
+        if (lower.contains("camera")) return "Camera";
+        if (lower.contains("gallery") || lower.contains("photos")) return "Gallery";
+        if (lower.contains("music")) return "Music";
+        if (lower.contains("clock")) return "Clock";
+        if (lower.contains("weather")) return "Weather";
+        if (lower.contains("maps")) return "Maps";
+        if (lower.contains("play.store") || lower.contains("com.android.vending")) return "Play Store";
+        if (lower.contains("phone") || lower.contains("dialer")) return "Phone";
+        if (lower.contains("messages") || lower.contains("messaging")) return "Messages";
+        if (lower.contains("contacts")) return "Contacts";
+        if (lower.contains("email") || lower.contains("mail")) return "Email";
+        if (lower.contains("files") || lower.contains("filemanager")) return "Files";
+        if (lower.contains("notes")) return "Notes";
+
+        return bestPart.isEmpty() ? "Unknown App" : bestPart;
     }
 
     public static String getCurrentApp() {

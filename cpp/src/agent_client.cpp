@@ -249,6 +249,14 @@ void AgentClient::InitSystemPrompt() {
         L"39. [TOOL:full_map <dirpath>] — Get JSON map of files and content.\n"
         L"40. [TOOL:recall] — Load recent conversation memory.\n"
         L"41. [TOOL:forget] — Clear conversation memory.\n"
+        L"\n--- Voice & Speech Tools (whisper.cpp + Windows SAPI TTS) ---\n"
+        L"42. [TOOL:whisper_init <model_path>] — Initialize whisper.cpp speech-to-text with a GGML model. Download ggml-tiny.en.bin (~75MB) from https://huggingface.co/ggerganov/whisper.cpp\n"
+        L"43. [TOOL:whisper_status] — Check if whisper is initialized and ready.\n"
+        L"44. [TOOL:voice_listen <duration_seconds>] — Record from microphone and transcribe to text. Default 5s, max 30s.\n"
+        L"45. [TOOL:voice_transcribe <wav_file_path>] — Transcribe a WAV audio file to text.\n"
+        L"46. [TOOL:tts_speak <text>] — Speak text aloud using Windows SAPI voice.\n"
+        L"47. [TOOL:tts_stop] — Stop any ongoing TTS playback.\n"
+        L"48. [TOOL:tts_status] — Check if TTS is currently speaking.\n"
         L"\n--- Key Usage Notes ---\n"
         L"- For 'what tabs are open': use [TOOL:screen_apps]\n"
         L"- For 'list files in <folder>': use [TOOL:list_files <path>]\n"
@@ -260,6 +268,9 @@ void AgentClient::InitSystemPrompt() {
         L"- Use [TOOL:keyboard_hotkey ctrl+l] to focus the browser address bar, then [TOOL:keyboard_type <url>] and [TOOL:keyboard_key enter] to navigate.\n"
         L"- Use [TOOL:keyboard_key tab] to move between focusable elements on a page, then [TOOL:keyboard_key enter] to activate.\n"
         L"- Do NOT auto-trigger RAG on simple messages. Only use RAG tools when user asks about files in synced folders.\n"
+        L"- Voice input: when user says 'listen', 'record my voice', 'hear me' → use [TOOL:voice_listen 5] to record+transcribe.\n"
+        L"- Voice output: when user says 'speak', 'read aloud', 'say it' → use [TOOL:tts_speak <text>] to speak response.\n"
+        L"- If whisper not initialized, tell user to download ggml-tiny.en.bin and use [TOOL:whisper_init <path>].\n"
         L"- If primary model is unavailable, fallback model (MiniCPM5-1B) is used automatically.";
 }
 

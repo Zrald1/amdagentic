@@ -5,6 +5,7 @@
 #include "tools/screen_context.h"
 #include "tools/ui_locator.h"
 #include "tools/computer_use_tool.h"
+#include "../src_cross/whisper_wrapper.h"
 
 #include <sstream>
 #include <filesystem>
@@ -978,6 +979,86 @@ std::string dispatch_tool(const std::string& tool_name, const std::string& args)
     if (tool_name == "memory_clear" || tool_name == "forget") {
         bool ok = rag_memory_clear();
         return ok ? "{\"success\":true,\"message\":\"Memory cleared\"}" : "{\"success\":false}";
+    }
+
+    // ── Voice / Speech Tools (whisper.cpp + native TTS) ──
+
+    if (tool_name == "whisper_init" || tool_name == "voice_init") {
+        if (args.empty()) {
+            return "{\"error\":\"whisper_init needs: <model_path>. Download ggml-tiny.en.bin from https://huggingface.co/ggerganov/whisper.cpp\"}";
+        }
+        bool ok = argos::whisperInit(args);
+        if (ok) return "{\"status\":\"success\",\"model\":\"" + args + "\"}";
+        return "{\"error\":\"Failed to load whisper model: " + args + "\"}";
+    }
+
+    if (tool_name == "whisper_status" || tool_name == "voice_status") {
+        if (argos::whisperIsReady()) {
+            return "{\"status\":\"ready\",\"model\":\"" + argos::whisperGetModelPath() + "\"}";
+        }
+        return "{\"status\":\"not_initialized\",\"hint\":\"Use whisper_init <model_path> to initialize.\"}";
+    }
+
+    if (tool_name == "voice_listen" || tool_name == "voice_record") {
+        int duration = 5;
+        if (!args.empty()) {
+            duration = std::atoi(args.c_str());
+            if (duration < 1) duration = 5;
+            if (duration > 30) duration = 30;
+        }
+        if (!argos::whisperIsReady()) {
+            return "{\"error\":\"Whisper not initialized. Use whisper_init <model_path> first.\"}";
+        }
+        auto samples = argos::recordAudio(duration);
+        if (samples.empty()) {
+            return "{\"error\":\"No audio recorded. Check microphone.\"}";
+        }
+        std::string text = argos::whisperTranscribe(samples);
+        if (text.empty()) {
+            return "{\"status\":\"empty\",\"message\":\"No speech detected\"}";
+        }
+        return "{\"status\":\"success\",\"text\":\"" + text + "\",\"duration\":" + std::to_string(duration) + "}";
+    }
+
+    if (tool_name == "voice_transcribe" || tool_name == "whisper_transcribe") {
+        if (args.empty()) return "{\"error\":\"voice_transcribe needs: <wav_file_path>\"}";
+        if (!argos::whisperIsReady()) {
+            return "{\"error\":\"Whisper not initialized. Use whisper_init <model_path> first.\"}";
+        }
+        std::ifstream wavFile(args, std::ios::binary);
+        if (!wavFile.is_open()) return "{\"error\":\"Cannot open file: " + args + "\"}";
+        wavFile.seekg(0, std::ios::end);
+        size_t fileSize = wavFile.tellg();
+        if (fileSize < 44) return "{\"error\":\"File too small to be a valid WAV\"}";
+        wavFile.seekg(44, std::ios::beg);
+        size_t dataSize = fileSize - 44;
+        size_t numSamples = dataSize / 2;
+        std::vector<int16_t> pcm16(numSamples);
+        wavFile.read((char*)pcm16.data(), dataSize);
+        wavFile.close();
+        std::vector<float> samples(numSamples);
+        for (size_t i = 0; i < numSamples; i++) {
+            samples[i] = (float)pcm16[i] / 32768.0f;
+        }
+        std::string text = argos::whisperTranscribe(samples);
+        return "{\"status\":\"success\",\"text\":\"" + text + "\",\"samples\":" + std::to_string(numSamples) + "}";
+    }
+
+    if (tool_name == "tts_speak" || tool_name == "speak" || tool_name == "voice_speak") {
+        if (args.empty()) return "{\"error\":\"tts_speak needs: <text>\"}";
+        bool ok = argos::ttsSpeak(args);
+        if (ok) return "{\"status\":\"speaking\",\"text\":\"" + args + "\"}";
+        return "{\"error\":\"TTS not available or failed\"}";
+    }
+
+    if (tool_name == "tts_stop" || tool_name == "voice_stop") {
+        argos::ttsStop();
+        return "{\"status\":\"stopped\"}";
+    }
+
+    if (tool_name == "tts_status") {
+        if (argos::ttsIsSpeaking()) return "{\"speaking\":true}";
+        return "{\"speaking\":false}";
     }
 
     return "{\"error\":\"Unknown tool: " + tool_name + "\"}";

@@ -263,33 +263,18 @@ std::vector<float> recordAudioWithVAD(int maxDuration, float silenceThreshold) {
 
 // TTS - platform native
 bool ttsSpeak(const std::string& text) {
-#ifdef __ANDROID__
-    // Call Java TextToSpeech via JNI
     std::string result = argos::ttsSpeakJava(text);
     return result.find("\"error\"") == std::string::npos;
-#else
-    // Windows SAPI
-    // TODO: implement with ISpVoice
-    return false;
-#endif
 }
 
 bool ttsStop() {
-#ifdef __ANDROID__
-    std::string result = argos::ttsStopJava();
+    argos::ttsStopJava();
     return true;
-#else
-    return false;
-#endif
 }
 
 bool ttsIsSpeaking() {
-#ifdef __ANDROID__
     std::string result = argos::ttsIsSpeakingJava();
     return result.find("true") != std::string::npos;
-#else
-    return false;
-#endif
 }
 
 } // namespace argos

@@ -72,3 +72,7 @@ imgui.ini
 # Runtime config (contains API key — do not commit)
 argos_config.txt
 **/argos_config.txt
+
+# Whisper model files (large binary files, download separately)
+*.bin
+ggml-*.bin

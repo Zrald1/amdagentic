@@ -1106,6 +1106,127 @@ public class FloatingRobotService extends Service implements SurfaceHolder.Callb
         return svc.getScreenSize();
     }
 
+    // ── Voice / Audio bridge methods ──
+
+    private android.media.AudioRecord m_audioRecord = null;
+    private android.speech.tts.TextToSpeech m_tts = null;
+    private boolean m_ttsReady = false;
+
+    // Record audio from microphone, returns 16-bit PCM at 16kHz mono as byte[]
+    public byte[] recordAudioJava(int durationSeconds) {
+        try {
+            final int sampleRate = 16000;
+            final int channelConfig = android.media.AudioFormat.CHANNEL_IN_MONO;
+            final int audioFormat = android.media.AudioFormat.ENCODING_PCM_16BIT;
+            int minBuf = android.media.AudioRecord.getMinBufferSize(sampleRate, channelConfig, audioFormat);
+            int bufferSize = Math.max(minBuf, sampleRate * durationSeconds * 2); // 2 bytes per sample
+
+            if (m_audioRecord != null) {
+                try { m_audioRecord.release(); } catch (Exception e) {}
+                m_audioRecord = null;
+            }
+
+            m_audioRecord = new android.media.AudioRecord(
+                android.media.MediaRecorder.AudioSource.MIC,
+                sampleRate, channelConfig, audioFormat, bufferSize);
+
+            if (m_audioRecord.getState() != android.media.AudioRecord.STATE_INITIALIZED) {
+                return new byte[0];
+            }
+
+            int totalSamples = sampleRate * durationSeconds;
+            byte[] audioData = new byte[totalSamples * 2]; // 16-bit = 2 bytes
+
+            m_audioRecord.startRecording();
+            int totalRead = 0;
+            int toRead = audioData.length;
+            while (totalRead < toRead) {
+                int read = m_audioRecord.read(audioData, totalRead, toRead - totalRead);
+                if (read <= 0) break;
+                totalRead += read;
+            }
+            m_audioRecord.stop();
+            m_audioRecord.release();
+            m_audioRecord = null;
+
+            if (totalRead < audioData.length) {
+                byte[] trimmed = new byte[totalRead];
+                System.arraycopy(audioData, 0, trimmed, 0, totalRead);
+                return trimmed;
+            }
+            return audioData;
+        } catch (Exception e) {
+            if (m_audioRecord != null) {
+                try { m_audioRecord.release(); } catch (Exception ex) {}
+                m_audioRecord = null;
+            }
+            android.util.Log.e("ArgosAudio", "recordAudioJava failed: " + e.getMessage());
+            return new byte[0];
+        }
+    }
+
+    // Initialize TTS engine
+    private void initTTS() {
+        if (m_tts != null) return;
+        m_tts = new android.speech.tts.TextToSpeech(this, new android.speech.tts.TextToSpeech.OnInitListener() {
+            @Override
+            public void onInit(int status) {
+                if (status == android.speech.tts.TextToSpeech.SUCCESS) {
+                    m_tts.setLanguage(java.util.Locale.US);
+                    m_ttsReady = true;
+                    android.util.Log.i("ArgosTTS", "TTS initialized successfully");
+                } else {
+                    android.util.Log.e("ArgosTTS", "TTS init failed with status: " + status);
+                }
+            }
+        });
+    }
+
+    // Speak text using Android TextToSpeech
+    public String ttsSpeakJava(String text) {
+        try {
+            if (m_tts == null || !m_ttsReady) {
+                initTTS();
+                // Wait briefly for init
+                try { Thread.sleep(500); } catch (Exception e) {}
+            }
+            if (m_tts == null || !m_ttsReady) {
+                return "{\"error\":\"TTS not ready\"}";
+            }
+            int result = m_tts.speak(text, android.speech.tts.TextToSpeech.QUEUE_FLUSH, null, "argos_tts_" + System.currentTimeMillis());
+            if (result == android.speech.tts.TextToSpeech.SUCCESS) {
+                return "{\"status\":\"speaking\",\"text\":\"" + text.replace("\"", "\\\"") + "\"}";
+            }
+            return "{\"error\":\"TTS speak failed\"}";
+        } catch (Exception e) {
+            return "{\"error\":\"TTS error: " + e.getMessage() + "\"}";
+        }
+    }
+
+    // Stop TTS playback
+    public String ttsStopJava() {
+        try {
+            if (m_tts != null) {
+                m_tts.stop();
+            }
+            return "{\"status\":\"stopped\"}";
+        } catch (Exception e) {
+            return "{\"error\":\"TTS stop error: " + e.getMessage() + "\"}";
+        }
+    }
+
+    // Check if TTS is currently speaking
+    public String ttsIsSpeakingJava() {
+        try {
+            if (m_tts != null && m_tts.isSpeaking()) {
+                return "{\"speaking\":true}";
+            }
+            return "{\"speaking\":false}";
+        } catch (Exception e) {
+            return "{\"speaking\":false}";
+        }
+    }
+
     // Called from C++ via JNI to perform HTTP POST (handles HTTPS automatically)
     public String httpPostJava(String url, String headers, String body, boolean stream) {
         try {

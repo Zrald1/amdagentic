@@ -98,6 +98,17 @@ std::string getClickableElements();
 // Get screen size as JSON {"width":W,"height":H}
 std::string getScreenSize();
 
+// ── Voice / Audio (whisper.cpp + native TTS) ──
+
+// Record audio from microphone (Android: AudioRecord via JNI, Windows: WaveIn)
+// Returns raw 16-bit PCM data as a string (bytes)
+std::string recordAudioJava(int durationSeconds);
+
+// Text-to-Speech (Android: TextToSpeech, Windows: SAPI)
+std::string ttsSpeakJava(const std::string& text);
+std::string ttsStopJava();
+std::string ttsIsSpeakingJava();
+
 // Get current time in milliseconds
 int64_t getTimeMs();
 

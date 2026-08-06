@@ -532,4 +532,60 @@ std::string getScreenSize() {
     return callJavaNoArgMethod("getScreenSizeJava", "()Ljava/lang/String;");
 }
 
+// ── Voice / Audio JNI implementations ──
+
+std::string recordAudioJava(int durationSeconds) {
+    LOGI("recordAudioJava: duration=%d", durationSeconds);
+    if (!s_jvm || !s_service) return "";
+    JNIEnv* env = nullptr;
+    bool attached = false;
+    if (s_jvm->GetEnv((void**)&env, JNI_VERSION_1_6) != JNI_OK) {
+        s_jvm->AttachCurrentThread(&env, nullptr);
+        attached = true;
+    }
+    if (!env) return "";
+
+    jclass cls = env->GetObjectClass(s_service);
+    if (!cls) { if (attached) s_jvm->DetachCurrentThread(); return ""; }
+    jmethodID mid = env->GetMethodID(cls, "recordAudioJava", "(I)[B");
+    if (!mid) {
+        env->DeleteLocalRef(cls);
+        if (attached) s_jvm->DetachCurrentThread();
+        return "";
+    }
+
+    jbyteArray jresult = (jbyteArray) env->CallObjectMethod(s_service, mid, (jint)durationSeconds);
+
+    std::string result;
+    if (jresult) {
+        jsize len = env->GetArrayLength(jresult);
+        jbyte* bytes = env->GetByteArrayElements(jresult, nullptr);
+        if (bytes && len > 0) {
+            result.assign((const char*)bytes, len);
+        }
+        env->ReleaseByteArrayElements(jresult, bytes, JNI_ABORT);
+        env->DeleteLocalRef(jresult);
+    }
+    env->DeleteLocalRef(cls);
+
+    if (env->ExceptionCheck()) { env->ExceptionDescribe(); env->ExceptionClear(); }
+    if (attached) s_jvm->DetachCurrentThread();
+    return result;
+}
+
+std::string ttsSpeakJava(const std::string& text) {
+    LOGI("ttsSpeakJava: %s", text.c_str());
+    return callJavaStringMethod("ttsSpeakJava", "(Ljava/lang/String;)Ljava/lang/String;", text);
+}
+
+std::string ttsStopJava() {
+    LOGI("ttsStopJava");
+    return callJavaNoArgMethod("ttsStopJava", "()Ljava/lang/String;");
+}
+
+std::string ttsIsSpeakingJava() {
+    LOGI("ttsIsSpeakingJava");
+    return callJavaNoArgMethod("ttsIsSpeakingJava", "()Ljava/lang/String;");
+}
+
 } // namespace argos

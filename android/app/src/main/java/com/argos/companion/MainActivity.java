@@ -14,6 +14,7 @@ import android.graphics.Color;
 import android.view.Gravity;
 import android.view.ViewGroup;
 import android.accessibilityservice.AccessibilityServiceInfo;
+import android.content.pm.PackageManager;
 import android.content.pm.ServiceInfo;
 import android.view.accessibility.AccessibilityManager;
 import java.util.List;
@@ -21,6 +22,7 @@ import java.util.List;
 public class MainActivity extends Activity {
 
     private static final int OVERLAY_PERMISSION_REQUEST_CODE = 1001;
+    private static final int MIC_PERMISSION_REQUEST_CODE = 1002;
 
     static {
         System.loadLibrary("argos");
@@ -29,6 +31,13 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+
+        // Request microphone permission for voice features
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                requestPermissions(new String[]{android.Manifest.permission.RECORD_AUDIO}, MIC_PERMISSION_REQUEST_CODE);
+            }
+        }
 
         if (hasOverlayPermission()) {
             startFloatingService();

@@ -1,6 +1,7 @@
 #include "argos_tools_core.h"
 #include "platform.h"
 #include "ui_inspector.h"
+#include "whisper_wrapper.h"
 #include <sstream>
 #include <vector>
 #include <fstream>
@@ -361,6 +362,117 @@ std::string dispatch_tool(const std::string& tool_name, const std::string& args)
 
     if (name == "screen_size" || name == "ui_screen_size") {
         return argos::getScreenSize();
+    }
+
+    // ── Voice / Speech tools (whisper.cpp + native TTS) ──
+
+    if (name == "voice_listen" || name == "voice_record") {
+        // Record audio from microphone and transcribe with whisper
+        // Args: optional duration in seconds (default 5)
+        int duration = 5;
+        if (!args.empty()) {
+            duration = std::atoi(args.c_str());
+            if (duration < 1) duration = 5;
+            if (duration > 30) duration = 30;
+        }
+
+        if (!argos::whisperIsReady()) {
+            return "{\"error\":\"Whisper not initialized. Use whisper_init <model_path> first. Download ggml-tiny.en.bin (~75MB) or ggml-base.en.bin (~142MB) from https://huggingface.co/ggerganov/whisper.cpp\"}";
+        }
+
+        auto samples = argos::recordAudio(duration);
+        if (samples.empty()) {
+            return "{\"error\":\"No audio recorded. Check microphone permission.\"}";
+        }
+
+        std::string text = argos::whisperTranscribe(samples);
+        if (text.empty()) {
+            return "{\"status\":\"empty\",\"message\":\"No speech detected in recording\"}";
+        }
+
+        return "{\"status\":\"success\",\"text\":\"" + text + "\",\"duration\":" + std::to_string(duration) + "}";
+    }
+
+    if (name == "voice_transcribe" || name == "whisper_transcribe") {
+        // Transcribe an audio file (WAV format) using whisper
+        // Args: path to WAV file
+        if (args.empty()) return "{\"error\":\"voice_transcribe needs: <wav_file_path>\"}";
+
+        if (!argos::whisperIsReady()) {
+            return "{\"error\":\"Whisper not initialized. Use whisper_init <model_path> first.\"}";
+        }
+
+        // Read WAV file and convert to float32 PCM
+        std::ifstream wavFile(args, std::ios::binary);
+        if (!wavFile.is_open()) {
+            return "{\"error\":\"Cannot open file: " + args + "\"}";
+        }
+
+        // Skip WAV header (44 bytes standard) and read 16-bit PCM
+        wavFile.seekg(0, std::ios::end);
+        size_t fileSize = wavFile.tellg();
+        if (fileSize < 44) {
+            return "{\"error\":\"File too small to be a valid WAV\"}";
+        }
+
+        wavFile.seekg(44, std::ios::beg); // Skip standard WAV header
+        size_t dataSize = fileSize - 44;
+        size_t numSamples = dataSize / 2; // 16-bit samples
+
+        std::vector<int16_t> pcm16(numSamples);
+        wavFile.read((char*)pcm16.data(), dataSize);
+        wavFile.close();
+
+        std::vector<float> samples(numSamples);
+        for (size_t i = 0; i < numSamples; i++) {
+            samples[i] = (float)pcm16[i] / 32768.0f;
+        }
+
+        std::string text = argos::whisperTranscribe(samples);
+        return "{\"status\":\"success\",\"text\":\"" + text + "\",\"samples\":" + std::to_string(numSamples) + "}";
+    }
+
+    if (name == "whisper_init" || name == "voice_init") {
+        // Initialize whisper with a model file
+        // Args: path to ggml model file (e.g. /sdcard/ggml-tiny.en.bin)
+        if (args.empty()) {
+            return "{\"error\":\"whisper_init needs: <model_path>. Download from https://huggingface.co/ggerganov/whisper.cpp\"}";
+        }
+
+        bool ok = argos::whisperInit(args);
+        if (ok) {
+            return "{\"status\":\"success\",\"model\":\"" + args + "\"}";
+        }
+        return "{\"error\":\"Failed to load whisper model: " + args + "\"}";
+    }
+
+    if (name == "whisper_status" || name == "voice_status") {
+        if (argos::whisperIsReady()) {
+            return "{\"status\":\"ready\",\"model\":\"" + argos::whisperGetModelPath() + "\"}";
+        }
+        return "{\"status\":\"not_initialized\",\"hint\":\"Use whisper_init <model_path> to initialize. Download ggml-tiny.en.bin from https://huggingface.co/ggerganov/whisper.cpp\"}";
+    }
+
+    if (name == "tts_speak" || name == "speak" || name == "voice_speak") {
+        // Speak text using native TTS (Android TextToSpeech / Windows SAPI)
+        if (args.empty()) return "{\"error\":\"tts_speak needs: <text>\"}";
+        bool ok = argos::ttsSpeak(args);
+        if (ok) {
+            return "{\"status\":\"speaking\",\"text\":\"" + args + "\"}";
+        }
+        return "{\"error\":\"TTS not available or failed\"}";
+    }
+
+    if (name == "tts_stop" || name == "voice_stop") {
+        argos::ttsStop();
+        return "{\"status\":\"stopped\"}";
+    }
+
+    if (name == "tts_status") {
+        if (argos::ttsIsSpeaking()) {
+            return "{\"speaking\":true}";
+        }
+        return "{\"speaking\":false}";
     }
 
     return "{\"error\":\"Unknown tool: " + name + "\"}";

@@ -233,6 +233,69 @@ std::string browser_summarize() {
     return browsertool::summarize_page();
 }
 
+std::string browser_search(const std::string& query) {
+    // Build a YouTube search URL and navigate to it
+    std::string url = "https://www.youtube.com/results?search_query=" + query;
+    // URL-encode spaces as +
+    for (auto& c : url) if (c == ' ') c = '+';
+    bool ok = browsertool::navigate(url);
+    if (ok) {
+        // Give the browser time to load the search results
+        #if defined(_WIN32)
+        Sleep(3000);
+        #endif
+    }
+    return ok ? "{\"success\":true,\"url\":\"" + url + "\",\"message\":\"YouTube search results opened. Use browser_click_text to click a video title.\"}" : "{\"success\":false}";
+}
+
+std::string browser_click_text(const std::string& text) {
+    // On Windows, we can't easily inspect browser DOM, so we use UI automation
+    // to search for the text on screen and click on it
+#if defined(_WIN32)
+    // Use the UI locator to find clickable elements matching the text
+    auto results = uilocator::search_clickable(text, "");
+    if (!results.empty()) {
+        // Click the first matching result
+        auto& r = results[0];
+        int cx = r.element.bounds.x + r.element.bounds.width / 2;
+        int cy = r.element.bounds.y + r.element.bounds.height / 2;
+        bool ok = uilocator::click_at(cx, cy);
+        if (ok) {
+            Sleep(2000); // Give page time to load after click
+            return "{\"success\":true,\"clicked_text\":\"" + text + "\"}";
+        }
+        return "{\"success\":false}";
+    }
+    // Fallback: try searching screen content for the text
+    auto searchResults = search_content(text);
+    if (!searchResults.empty()) {
+        // Try clicking at the location where text was found
+        auto& sr = searchResults[0];
+        int cx = sr.block.x + sr.block.width / 2;
+        int cy = sr.block.y + sr.block.height / 2;
+        bool ok = uilocator::click_at(cx, cy);
+        if (ok) {
+            Sleep(2000);
+            return "{\"success\":true,\"clicked_text\":\"" + text + "\"}";
+        }
+        return "{\"success\":false}";
+    }
+    return "{\"success\":false,\"error\":\"Text not found on screen: " + text + "\"}";
+#else
+    return "{\"success\":false,\"error\":\"Not supported on this platform\"}";
+#endif
+}
+
+std::string browser_type_active(const std::string& text) {
+    bool ok = browsertool::type_text_into_active_element(text);
+    return ok ? "{\"success\":true}" : "{\"success\":false}";
+}
+
+std::string browser_press_key(const std::string& key) {
+    bool ok = browsertool::press_key(key);
+    return ok ? "{\"success\":true}" : "{\"success\":false}";
+}
+
 // ── Screen Context ──
 
 std::string screen_list_apps() {
@@ -789,6 +852,18 @@ std::string dispatch_tool(const std::string& tool_name, const std::string& args)
     }
     if (tool_name == "browser_summarize") {
         return browser_summarize();
+    }
+    if (tool_name == "browser_search") {
+        return browser_search(args);
+    }
+    if (tool_name == "browser_click_text" || tool_name == "browser_click") {
+        return browser_click_text(args);
+    }
+    if (tool_name == "browser_type_active" || tool_name == "browser_type") {
+        return browser_type_active(args);
+    }
+    if (tool_name == "browser_press_key" || tool_name == "browser_key") {
+        return browser_press_key(args);
     }
     if (tool_name == "screen_apps") {
         return screen_list_apps();

@@ -58,6 +58,18 @@ std::string browser_get_links();
 // Summarize page content
 std::string browser_summarize();
 
+// Search on YouTube (opens search results in browser)
+std::string browser_search(const std::string& query);
+
+// Click on text visible on screen (uses UI automation)
+std::string browser_click_text(const std::string& text);
+
+// Type text into the currently focused element
+std::string browser_type_active(const std::string& text);
+
+// Press a keyboard key (enter, tab, escape, etc.)
+std::string browser_press_key(const std::string& key);
+
 // ── Screen Context ──
 
 // List all open application windows

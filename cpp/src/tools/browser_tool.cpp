@@ -1342,8 +1342,8 @@ bool navigate(const std::string& url) {
         ShellExecuteW(nullptr, L"open", L"cmd.exe",
                       (L"/c start " + wUrl).c_str(), nullptr, SW_HIDE);
     }
-    // Give browser time to open
-    Sleep(1500);
+    // Give browser time to open and load
+    Sleep(2500);
     return true;
 #else
     return false;
@@ -2088,7 +2088,23 @@ bool click_element_at(int x, int y) {
         }
         return false;
     }
+#if defined(_WIN32)
+    // Real Win32: move mouse to (x,y), click, then restore position
+    POINT oldPos;
+    GetCursorPos(&oldPos);
+    // Set cursor position
+    SetCursorPos(x, y);
+    Sleep(100);
+    // Mouse down + up (left click)
+    mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0);
+    mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0);
+    Sleep(200);
+    // Restore cursor
+    SetCursorPos(oldPos.x, oldPos.y);
+    return true;
+#else
     return false;
+#endif
 }
 
 bool type_text(const std::string& element_id, const std::string& text) {
@@ -2101,12 +2117,74 @@ bool type_text(const std::string& element_id, const std::string& text) {
 
 bool type_text_into_active_element(const std::string& text) {
     if (g_simulation_mode) return true;
+#if defined(_WIN32)
+    // Real Win32: send each character as a key event to whatever has focus
+    for (char c : text) {
+        if (c == ' ') {
+            keybd_event(VK_SPACE, 0, 0, 0);
+            keybd_event(VK_SPACE, 0, KEYEVENTF_KEYUP, 0);
+        } else if (c == '\n' || c == '\r') {
+            keybd_event(VK_RETURN, 0, 0, 0);
+            keybd_event(VK_RETURN, 0, KEYEVENTF_KEYUP, 0);
+        } else if ((unsigned char)c >= 0x80) {
+            // For non-ASCII chars, use Unicode input
+            INPUT input = {};
+            input.type = INPUT_KEYBOARD;
+            input.ki.wScan = (unsigned char)c;
+            input.ki.dwFlags = KEYEVENTF_UNICODE;
+            SendInput(1, &input, sizeof(INPUT));
+            input.ki.dwFlags = KEYEVENTF_UNICODE | KEYEVENTF_KEYUP;
+            SendInput(1, &input, sizeof(INPUT));
+        } else {
+            short vk = VkKeyScanA(c);
+            if (vk != -1) {
+                BYTE vkey = vk & 0xFF;
+                bool shift = (vk & 0x100) != 0;
+                if (shift) keybd_event(VK_SHIFT, 0, 0, 0);
+                keybd_event(vkey, 0, 0, 0);
+                keybd_event(vkey, 0, KEYEVENTF_KEYUP, 0);
+                if (shift) keybd_event(VK_SHIFT, 0, KEYEVENTF_KEYUP, 0);
+            }
+        }
+        Sleep(10);
+    }
+    return true;
+#else
     return false;
+#endif
 }
 
 bool press_key(const std::string& key) {
     if (g_simulation_mode) return true;
+#if defined(_WIN32)
+    // Map common key names to virtual key codes
+    WORD vk = 0;
+    std::string lowerKey = key;
+    for (auto& c : lowerKey) c = (char)tolower((unsigned char)c);
+
+    if (lowerKey == "enter" || lowerKey == "return") vk = VK_RETURN;
+    else if (lowerKey == "tab") vk = VK_TAB;
+    else if (lowerKey == "escape" || lowerKey == "esc") vk = VK_ESCAPE;
+    else if (lowerKey == "backspace" || lowerKey == "back") vk = VK_BACK;
+    else if (lowerKey == "delete" || lowerKey == "del") vk = VK_DELETE;
+    else if (lowerKey == "space") vk = VK_SPACE;
+    else if (lowerKey == "up") vk = VK_UP;
+    else if (lowerKey == "down") vk = VK_DOWN;
+    else if (lowerKey == "left") vk = VK_LEFT;
+    else if (lowerKey == "right") vk = VK_RIGHT;
+    else if (lowerKey == "home") vk = VK_HOME;
+    else if (lowerKey == "end") vk = VK_END;
+    else if (lowerKey == "f5") vk = VK_F5;
+    else if (key.size() == 1) vk = VkKeyScanA(key[0]) & 0xFF;
+    else return false;
+
+    keybd_event(vk, 0, 0, 0);
+    keybd_event(vk, 0, KEYEVENTF_KEYUP, 0);
+    Sleep(100);
+    return true;
+#else
     return false;
+#endif
 }
 
 bool select_option(const std::string& element_id, const std::string& value) {

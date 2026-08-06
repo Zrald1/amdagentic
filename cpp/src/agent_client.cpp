@@ -229,19 +229,25 @@ void AgentClient::InitSystemPrompt() {
         L"21. [TOOL:browser_navigate <url>] — Open a URL in browser.\n"
         L"22. [TOOL:browser_content] — Get current page text content.\n"
         L"23. [TOOL:browser_links] — Get all links on current page.\n"
+        L"24. [TOOL:browser_search <query>] — Search YouTube for a query (opens results page).\n"
+        L"25. [TOOL:browser_click_text <text>] — Click on text visible on screen (e.g. a video title).\n"
+        L"26. [TOOL:browser_type_active <text>] — Type text into the currently focused element.\n"
+        L"27. [TOOL:browser_press_key <key>] — Press a keyboard key (enter, tab, escape, etc.).\n"
         L"\n--- File Search & RAG Tools (call ONLY when needed) ---\n"
-        L"24. [TOOL:rag_search <query>] — Search synced folders for content.\n"
-        L"25. [TOOL:search_files <dirpath>|<query>] — Search text content in a directory.\n"
-        L"26. [TOOL:search_filename <dirpath>|<pattern>] — Search filenames by pattern.\n"
-        L"27. [TOOL:index <dirpath>] — Index a directory for searching.\n"
-        L"28. [TOOL:full_map <dirpath>] — Get JSON map of files and content.\n"
-        L"29. [TOOL:recall] — Load recent conversation memory.\n"
-        L"30. [TOOL:forget] — Clear conversation memory.\n"
+        L"28. [TOOL:rag_search <query>] — Search synced folders for content.\n"
+        L"29. [TOOL:search_files <dirpath>|<query>] — Search text content in a directory.\n"
+        L"30. [TOOL:search_filename <dirpath>|<pattern>] — Search filenames by pattern.\n"
+        L"31. [TOOL:index <dirpath>] — Index a directory for searching.\n"
+        L"32. [TOOL:full_map <dirpath>] — Get JSON map of files and content.\n"
+        L"33. [TOOL:recall] — Load recent conversation memory.\n"
+        L"34. [TOOL:forget] — Clear conversation memory.\n"
         L"\n--- Key Usage Notes ---\n"
         L"- For 'what tabs are open': use [TOOL:screen_apps]\n"
         L"- For 'list files in <folder>': use [TOOL:list_files <path>]\n"
         L"- For web search: use [TOOL:search <query>]\n"
-        L"- After browser_navigate or search, just tell user what you opened — do NOT loop.\n"
+        L"- For YouTube: use [TOOL:browser_search <query>] to search, then [TOOL:browser_click_text <video_title>] to play a video.\n"
+        L"- For multi-step browser tasks (open + search + play): call tools SEQUENTIALLY in separate responses. The tool loop will continue automatically.\n"
+        L"- Example: 'Open YouTube and play 2026 reggae songs' → Step 1: [TOOL:browser_search 2026 reggae songs] → Step 2: [TOOL:browser_click_text reggae] (click first video)\n"
         L"- Do NOT auto-trigger RAG on simple messages. Only use RAG tools when user asks about files in synced folders.\n"
         L"- If primary model is unavailable, fallback model (MiniCPM5-1B) is used automatically.";
 }
@@ -284,16 +290,6 @@ std::wstring AgentClient::Chat(const std::wstring& userMessage) {
         // Show the user what Argos is doing (clean text without tool tags)
         std::wstring cleanResponse = StripToolTags(response);
 
-        // If browser/search tools were called, break early — browser is open, no need to loop
-        if (response.find(L"[TOOL:search ") != std::wstring::npos ||
-            response.find(L"[TOOL:browser_navigate ") != std::wstring::npos ||
-            response.find(L"[TOOL:browser_open ") != std::wstring::npos) {
-            finalResponse = cleanResponse;
-            // Still add to history for context
-            m_history.push_back({L"assistant", response});
-            break;
-        }
-
         // Add the assistant's intermediate response to history
         m_history.push_back({L"assistant", response});
 
@@ -301,7 +297,9 @@ std::wstring AgentClient::Chat(const std::wstring& userMessage) {
         std::wstring toolFeedback =
             L"Tool execution results:\n" + toolResults +
             L"\n\nBased on these results, please give the user a clear, natural answer. "
-            L"Do NOT repeat the raw data. Just tell them what they asked in a friendly way.";
+            L"Do NOT repeat the raw data. Just tell them what they asked in a friendly way. "
+            L"If you need to perform another action (like clicking a link or typing text), "
+            L"call another tool — but do NOT say 'let me check' without including a tool tag.";
         m_history.push_back({L"user", toolFeedback});
 
         // Save the clean intermediate response as the final for now
@@ -763,20 +761,14 @@ std::wstring AgentClient::ChatStreaming(const std::wstring& userMessage, StreamC
         LogError("Tool results: " + WideToUtf8(toolResults.substr(0, 200)));
         m_history.push_back({L"assistant", finalResponse});
 
-        // If browser/search tools were called, break early — browser is open, no need to loop
-        if (finalResponse.find(L"[TOOL:search ") != std::wstring::npos ||
-            finalResponse.find(L"[TOOL:browser_navigate ") != std::wstring::npos ||
-            finalResponse.find(L"[TOOL:browser_open ") != std::wstring::npos) {
-            finalResponse = StripToolTags(finalResponse);
-            break;
-        }
-
+        // Add tool results to history so AI can use them for the next step
         m_history.push_back({L"system", L"[Tool Results]\n" + toolResults});
 
-        // Add a user message prompting the AI to use the tool results
+        // Prompt AI to either use the tool results or call another tool
         m_history.push_back({L"user", L"Based on the tool results above, please give me a clear, natural answer. "
             L"Do NOT repeat the raw data. Just tell me what I asked in a friendly way. "
-            L"If you need more information, call another tool — but do NOT say 'let me check' without including a tool tag."});
+            L"If you need more information or need to perform another action (like clicking a link or typing text), "
+            L"call another tool — but do NOT say 'let me check' without including a tool tag."});
 
         if (m_history.size() > 30) {
             m_history.erase(m_history.begin(), m_history.begin() + (m_history.size() - 30));

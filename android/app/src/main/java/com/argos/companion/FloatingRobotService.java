@@ -930,7 +930,14 @@ public class FloatingRobotService extends Service implements SurfaceHolder.Callb
     // Returns the current app the user is looking at (for AI context)
     public String getCurrentAppContext() {
         String label = ArgosAccessibilityService.getCurrentAppLabel();
-        if (label == null || label.isEmpty()) return "";
+        String history = ArgosAccessibilityService.getAppHistory();
+        if (label == null || label.isEmpty()) {
+            if (history != null && !history.isEmpty()) return "recently: " + history;
+            return "";
+        }
+        if (history != null && !history.isEmpty() && !history.equals(label)) {
+            return label + " (recently used: " + history + ")";
+        }
         return label;
     }
 

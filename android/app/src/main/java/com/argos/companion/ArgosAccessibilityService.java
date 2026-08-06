@@ -7,9 +7,11 @@ import android.net.Uri;
 import android.os.Bundle;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
+import android.view.accessibility.AccessibilityWindowInfo;
 import android.util.Log;
 
 import java.util.ArrayList;
+import java.util.LinkedList;
 import java.util.List;
 
 public class ArgosAccessibilityService extends AccessibilityService {
@@ -18,6 +20,33 @@ public class ArgosAccessibilityService extends AccessibilityService {
     private static ArgosAccessibilityService instance;
     private static String currentApp = "";
     private static String currentAppLabel = "";
+    // Track recently used apps (most recent first, max 10)
+    private static final LinkedList<String> appHistory = new LinkedList<>();
+    private static final int MAX_HISTORY = 10;
+
+    // Packages to ignore (keyboards, IMEs, system UI, launchers that aren't real apps)
+    private static boolean isIgnoredPackage(String pkg) {
+        if (pkg == null || pkg.isEmpty()) return true;
+        if (pkg.equals("com.argos.companion")) return true;
+        // System UI
+        if (pkg.startsWith("com.android.systemui")) return true;
+        if (pkg.startsWith("android")) return true;
+        // Keyboards / IMEs
+        if (pkg.contains("inputmethod")) return true;
+        if (pkg.contains("ime")) return true;
+        if (pkg.equals("com.google.android.inputmethod.latin")) return true;
+        if (pkg.equals("com.android.inputmethod.latin")) return true;
+        if (pkg.startsWith("com.samsung.android.inputmethod")) return true;
+        if (pkg.startsWith("com.swiftkey")) return true;
+        // Common launcher packages
+        if (pkg.equals("com.android.launcher")) return true;
+        if (pkg.equals("com.android.launcher3")) return true;
+        if (pkg.contains("launcher")) return true;
+        // Notification shade / recents
+        if (pkg.contains("notification")) return true;
+        if (pkg.contains("recents")) return true;
+        return false;
+    }
 
     @Override
     public void onServiceConnected() {
@@ -38,17 +67,24 @@ public class ArgosAccessibilityService extends AccessibilityService {
 
     @Override
     public void onAccessibilityEvent(AccessibilityEvent event) {
+        int type = event.getEventType();
         // Detect app switches via TYPE_WINDOW_STATE_CHANGED
-        if (event.getEventType() == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+        if (type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
             String pkg = event.getPackageName() != null ? event.getPackageName().toString() : "";
-            if (pkg.isEmpty() || pkg.equals("com.argos.companion")) return;
-            // Ignore system UI packages
-            if (pkg.startsWith("com.android.systemui") || pkg.startsWith("android")) return;
+            if (isIgnoredPackage(pkg)) return;
 
             if (!pkg.equals(currentApp)) {
                 currentApp = pkg;
                 currentAppLabel = getAppLabel(pkg);
                 Log.i(TAG, "App switched to: " + pkg + " (" + currentAppLabel + ")");
+
+                // Add to history (avoid consecutive duplicates)
+                synchronized (appHistory) {
+                    if (appHistory.isEmpty() || !appHistory.getFirst().equals(currentAppLabel)) {
+                        appHistory.addFirst(currentAppLabel);
+                        if (appHistory.size() > MAX_HISTORY) appHistory.removeLast();
+                    }
+                }
 
                 // Notify FloatingRobotService
                 FloatingRobotService svc = FloatingRobotService.getInstance();
@@ -57,6 +93,49 @@ public class ArgosAccessibilityService extends AccessibilityService {
                 }
             }
         }
+    }
+
+    // Get the root node of the actual app window (not keyboard/IME)
+    private AccessibilityNodeInfo getRealAppRoot() {
+        // Try getWindows() first — allows us to filter out IME
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {
+            List<AccessibilityWindowInfo> windows = getWindows();
+            if (windows != null && !windows.isEmpty()) {
+                // Find an application window (not IME, not system)
+                for (AccessibilityWindowInfo win : windows) {
+                    if (win.getType() == AccessibilityWindowInfo.TYPE_APPLICATION) {
+                        AccessibilityNodeInfo root = win.getRoot();
+                        if (root != null) {
+                            String pkg = root.getPackageName() != null ? root.getPackageName().toString() : "";
+                            if (!isIgnoredPackage(pkg)) {
+                                return root;
+                            }
+                        }
+                    }
+                }
+                // Fallback: try any non-IME window
+                for (AccessibilityWindowInfo win : windows) {
+                    if (win.getType() != AccessibilityWindowInfo.TYPE_INPUT_METHOD) {
+                        AccessibilityNodeInfo root = win.getRoot();
+                        if (root != null) {
+                            String pkg = root.getPackageName() != null ? root.getPackageName().toString() : "";
+                            if (!isIgnoredPackage(pkg)) {
+                                return root;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // Final fallback: getRootInActiveWindow (may return IME)
+        AccessibilityNodeInfo root = getRootInActiveWindow();
+        if (root != null) {
+            String pkg = root.getPackageName() != null ? root.getPackageName().toString() : "";
+            if (!isIgnoredPackage(pkg)) {
+                return root;
+            }
+        }
+        return null;
     }
 
     // Get friendly app name from package
@@ -112,7 +191,7 @@ public class ArgosAccessibilityService extends AccessibilityService {
     // Get all text content currently visible on screen
     public String getScreenText() {
         try {
-            AccessibilityNodeInfo root = getRootInActiveWindow();
+            AccessibilityNodeInfo root = getRealAppRoot();
             if (root == null) {
                 return "{\"error\":\"No active window content available\"}";
             }
@@ -133,14 +212,29 @@ public class ArgosAccessibilityService extends AccessibilityService {
         }
     }
 
-    // Get the package name of the currently focused app
+    // Get the package name of the currently focused app (skips keyboard/IME)
     public String getActiveApp() {
         try {
-            AccessibilityNodeInfo root = getRootInActiveWindow();
+            AccessibilityNodeInfo root = getRealAppRoot();
             if (root != null && root.getPackageName() != null) {
                 String pkg = root.getPackageName().toString();
                 String className = root.getClassName() != null ? root.getClassName().toString() : "";
-                return "{\"package\":\"" + escapeJson(pkg) + "\",\"class\":\"" + escapeJson(className) + "\"}";
+                String label = getAppLabel(pkg);
+                // Build app history string
+                String historyStr = "";
+                synchronized (appHistory) {
+                    StringBuilder hs = new StringBuilder();
+                    for (int i = 0; i < appHistory.size(); i++) {
+                        if (i > 0) hs.append(", ");
+                        hs.append(appHistory.get(i));
+                    }
+                    historyStr = hs.toString();
+                }
+                return "{\"package\":\"" + escapeJson(pkg) + "\",\"name\":\"" + escapeJson(label) + "\",\"class\":\"" + escapeJson(className) + "\",\"recent_apps\":\"" + escapeJson(historyStr) + "\"}";
+            }
+            // Fallback: use tracked currentApp
+            if (!currentApp.isEmpty()) {
+                return "{\"package\":\"" + escapeJson(currentApp) + "\",\"name\":\"" + escapeJson(currentAppLabel) + "\"}";
             }
             return "{\"error\":\"No active window\"}";
         } catch (Exception e) {
@@ -148,10 +242,23 @@ public class ArgosAccessibilityService extends AccessibilityService {
         }
     }
 
+    // Get app history as comma-separated string
+    public static String getAppHistory() {
+        synchronized (appHistory) {
+            if (appHistory.isEmpty()) return "";
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < appHistory.size(); i++) {
+                if (i > 0) sb.append(", ");
+                sb.append(appHistory.get(i));
+            }
+            return sb.toString();
+        }
+    }
+
     // Click on the first element containing the given text
     public String clickText(String text) {
         try {
-            AccessibilityNodeInfo root = getRootInActiveWindow();
+            AccessibilityNodeInfo root = getRealAppRoot();
             if (root == null) {
                 return "{\"error\":\"No active window content available\"}";
             }
@@ -177,7 +284,7 @@ public class ArgosAccessibilityService extends AccessibilityService {
     // Type text into the currently focused input field
     public String typeText(String text) {
         try {
-            AccessibilityNodeInfo root = getRootInActiveWindow();
+            AccessibilityNodeInfo root = getRealAppRoot();
             if (root == null) {
                 return "{\"error\":\"No active window content available\"}";
             }
@@ -200,7 +307,7 @@ public class ArgosAccessibilityService extends AccessibilityService {
     // Scroll the current screen
     public String scrollScreen(int direction) {
         try {
-            AccessibilityNodeInfo root = getRootInActiveWindow();
+            AccessibilityNodeInfo root = getRealAppRoot();
             if (root == null) {
                 return "{\"error\":\"No active window content available\"}";
             }

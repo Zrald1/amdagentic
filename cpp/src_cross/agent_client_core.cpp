@@ -228,7 +228,7 @@ void AgentClientCore::initSystemPrompt() {
         "5. [TOOL:forget] — Clear conversation memory.\n"
         "6. [TOOL:open_url <url>] — Open a URL in the browser.\n"
         "7. [TOOL:screen_text] — Read all text currently visible on screen (any app, including browser).\n"
-        "8. [TOOL:screen_active] — Get the package name of the currently focused app.\n"
+        "8. [TOOL:screen_active] — Get the currently focused app name, package, and recently used apps.\n"
         "9. [TOOL:click_text <text>] — Click on the first element containing the given text.\n"
         "10. [TOOL:type_text <text>] — Type text into the currently focused input field.\n"
         "11. [TOOL:scroll <up|down>] — Scroll the current screen up or down.\n\n"
@@ -240,6 +240,8 @@ void AgentClientCore::initSystemPrompt() {
         "Use [TOOL:screen_text] again to read more content.\n\n"
         "Do NOT auto-trigger tools on simple messages. Only use tools when needed.\n"
         "User messages may include [Context: User is currently using <app>] — use this to give relevant answers.\n"
+        "When the user asks 'what am I doing' or 'what app am I using', use [TOOL:screen_active] to get accurate info.\n"
+        "The screen_active tool returns 'name' (friendly app name), 'package', and 'recent_apps' (comma-separated app history).\n"
         "If primary model is unavailable, fallback model is used automatically.";
 }
 

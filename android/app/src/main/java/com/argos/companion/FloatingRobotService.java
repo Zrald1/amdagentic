@@ -42,6 +42,20 @@ public class FloatingRobotService extends Service implements SurfaceHolder.Callb
     private WindowManager.LayoutParams bubbleParams;
     private int layoutType;
 
+    // Drag state
+    private boolean isDragging = false;
+    private float dragStartRawX = 0;
+    private float dragStartRawY = 0;
+    private int dragStartWindowX = 0;
+    private int dragStartWindowY = 0;
+
+    // Robot position tracking
+    private float robotScreenX = 0;
+    private float robotScreenY = 0;
+    private float robotSize = 100;
+    private int screenWidth = 1080;
+    private int screenHeight = 1920;
+
     private static FloatingRobotService instance;
 
     @Override
@@ -60,16 +74,16 @@ public class FloatingRobotService extends Service implements SurfaceHolder.Callb
 
     private void createFloatingWindow() {
         DisplayMetrics metrics = Resources.getSystem().getDisplayMetrics();
-        int screenWidth = metrics.widthPixels;
-        int screenHeight = metrics.heightPixels;
+        screenWidth = metrics.widthPixels;
+        screenHeight = metrics.heightPixels;
 
-        // Robot window size — just big enough for the robot, not full screen
-        // This allows touches to pass through to apps outside the robot area
-        float density = metrics.density;
-        int robotWindowWidth = (int) (250 * density);
-        int robotWindowHeight = (int) (320 * density);
+        // Robot size — 12% of screen width (must match C++ robot_gles.cpp)
+        robotSize = screenWidth * 0.12f;
+        // Window size — tight around robot: ~1.6x robot size wide, ~2.2x tall
+        int robotWindowWidth = (int) (robotSize * 1.6f);
+        int robotWindowHeight = (int) (robotSize * 2.2f);
 
-        // SurfaceView for robot rendering — small window, transparent
+        // SurfaceView for robot rendering — small tight window
         surfaceView = new SurfaceView(this);
         surfaceView.setZOrderOnTop(true);
         surfaceView.getHolder().setFormat(PixelFormat.TRANSLUCENT);
@@ -79,7 +93,7 @@ public class FloatingRobotService extends Service implements SurfaceHolder.Callb
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY :
             WindowManager.LayoutParams.TYPE_PHONE;
 
-        // Small overlay window — only covers robot area, touches outside pass through
+        // Small overlay window — tight around robot
         robotParams = new WindowManager.LayoutParams(
             robotWindowWidth,
             robotWindowHeight,
@@ -90,21 +104,57 @@ public class FloatingRobotService extends Service implements SurfaceHolder.Callb
         robotParams.gravity = Gravity.TOP | Gravity.START;
         // Center initially
         robotParams.x = (screenWidth - robotWindowWidth) / 2;
-        robotParams.y = (screenHeight - robotWindowHeight) / 2;
+        robotParams.y = (int) (screenHeight * 0.35f - robotWindowHeight / 2.0f);
 
         windowManager.addView(surfaceView, robotParams);
 
-        // Touch listener on the surface — forward to native in window-local coords
+        // Touch listener — handle drag + forward taps to native
         surfaceView.setOnTouchListener((v, event) -> {
             float x = event.getX();
             float y = event.getY();
             int action = event.getActionMasked();
+            float rawX = event.getRawX();
+            float rawY = event.getRawY();
+
             if (action == MotionEvent.ACTION_DOWN) {
+                dragStartRawX = rawX;
+                dragStartRawY = rawY;
+                dragStartWindowX = robotParams.x;
+                dragStartWindowY = robotParams.y;
+                isDragging = false;
                 nativeOnTouch(x, y, 0);
-            } else if (action == MotionEvent.ACTION_UP) {
-                nativeOnTouch(x, y, 1);
             } else if (action == MotionEvent.ACTION_MOVE) {
+                float dx = rawX - dragStartRawX;
+                float dy = rawY - dragStartRawY;
+                if (Math.abs(dx) > 15 || Math.abs(dy) > 15) {
+                    isDragging = true;
+                    // Move window to follow finger
+                    robotParams.x = dragStartWindowX + (int) dx;
+                    robotParams.y = dragStartWindowY + (int) dy;
+                    try {
+                        windowManager.updateViewLayout(surfaceView, robotParams);
+                    } catch (Exception e) {}
+                    // Update robot screen position in native
+                    float newScreenX = robotParams.x + robotParams.width / 2.0f;
+                    float newScreenY = robotParams.y + robotParams.height / 2.0f;
+                    nativeSetPosition(newScreenX, newScreenY);
+                    robotScreenX = newScreenX;
+                    robotScreenY = newScreenY;
+                }
                 nativeOnTouch(x, y, 2);
+            } else if (action == MotionEvent.ACTION_UP) {
+                if (isDragging) {
+                    // Tell native to resume from new position
+                    float newScreenX = robotParams.x + robotParams.width / 2.0f;
+                    float newScreenY = robotParams.y + robotParams.height / 2.0f;
+                    nativeSetPosition(newScreenX, newScreenY);
+                    robotScreenX = newScreenX;
+                    robotScreenY = newScreenY;
+                    isDragging = false;
+                } else {
+                    // Forward tap to native for head/body detection
+                    nativeOnTouch(x, y, 1);
+                }
             }
             return true;
         });
@@ -116,7 +166,7 @@ public class FloatingRobotService extends Service implements SurfaceHolder.Callb
             WindowManager.LayoutParams.WRAP_CONTENT,
             WindowManager.LayoutParams.WRAP_CONTENT,
             layoutType,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE | WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH,
             PixelFormat.TRANSLUCENT
         );
         bubbleParams.gravity = Gravity.TOP | Gravity.CENTER_HORIZONTAL;
@@ -125,12 +175,50 @@ public class FloatingRobotService extends Service implements SurfaceHolder.Callb
 
         bubbleOverlay.setVisibility(View.GONE);
         windowManager.addView(bubbleOverlay, bubbleParams);
+
+        // Touch listener on bubble — dismiss on outside touch
+        bubbleOverlay.setOnTouchListener((v, event) -> {
+            if (event.getActionMasked() == MotionEvent.ACTION_OUTSIDE) {
+                hideBubble();
+                return true;
+            }
+            return false;
+        });
     }
 
     // Called from C++ via JNI with robot position "x,y,size"
-    // Robot walks within the fixed window — no window movement needed
     public void onRobotPosition(String posStr) {
-        // No-op: robot renders within the small fixed window
+        try {
+            String[] parts = posStr.split(",");
+            if (parts.length < 3) return;
+            final float x = Float.parseFloat(parts[0]);
+            final float y = Float.parseFloat(parts[1]);
+            final float size = Float.parseFloat(parts[2]);
+
+            robotScreenX = x;
+            robotScreenY = y;
+            robotSize = size;
+
+            // Skip if dragging — Java controls position during drag
+            if (isDragging) return;
+
+            // Update window size to match robot
+            final int winW = (int) (size * 1.6f);
+            final int winH = (int) (size * 2.2f);
+
+            android.os.Handler handler = new android.os.Handler(getMainLooper());
+            handler.post(() -> {
+                if (surfaceView == null || robotParams == null) return;
+                robotParams.width = winW;
+                robotParams.height = winH;
+                // Position window so robot center maps to (x, y)
+                robotParams.x = (int) (x - winW / 2.0f);
+                robotParams.y = (int) (y - winH / 2.0f);
+                try {
+                    windowManager.updateViewLayout(surfaceView, robotParams);
+                } catch (Exception e) {}
+            });
+        } catch (Exception e) {}
     }
 
     private LinearLayout createSpeechBubble() {
@@ -147,14 +235,33 @@ public class FloatingRobotService extends Service implements SurfaceHolder.Callb
             maxWidth, LinearLayout.LayoutParams.WRAP_CONTENT);
         bubble.setLayoutParams(bParams);
 
-        // Title bar
+        // Title bar with close button
+        LinearLayout titleBar = new LinearLayout(this);
+        titleBar.setOrientation(LinearLayout.HORIZONTAL);
+        titleBar.setGravity(Gravity.CENTER_VERTICAL);
+        LinearLayout.LayoutParams titleBarParams = new LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        titleBarParams.bottomMargin = 16;
+
         TextView title = new TextView(this);
         title.setText("Ask Argos");
         title.setTextColor(Color.rgb(0, 200, 255));
         title.setTextSize(20f);
-        title.setPadding(0, 0, 0, 16);
         title.setGravity(Gravity.CENTER);
-        bubble.addView(title);
+        LinearLayout.LayoutParams titleParams = new LinearLayout.LayoutParams(
+            0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
+        titleBar.addView(title, titleParams);
+
+        ImageButton closeBtn = new ImageButton(this);
+        closeBtn.setImageResource(android.R.drawable.ic_menu_close_clear_cancel);
+        closeBtn.setBackgroundColor(Color.TRANSPARENT);
+        closeBtn.setPadding(8, 8, 8, 8);
+        LinearLayout.LayoutParams closeParams = new LinearLayout.LayoutParams(
+            (int) (40 * density), (int) (40 * density));
+        closeBtn.setOnClickListener(v -> hideBubble());
+        titleBar.addView(closeBtn, closeParams);
+
+        bubble.addView(titleBar, titleBarParams);
 
         // Neon blue divider
         View divider = new View(this);
@@ -236,10 +343,17 @@ public class FloatingRobotService extends Service implements SurfaceHolder.Callb
     }
 
     private void showBubble() {
+        // Position bubble near robot
+        bubbleParams.gravity = Gravity.TOP | Gravity.START;
+        bubbleParams.x = (int) Math.max(0, robotScreenX - 160);
+        bubbleParams.y = (int) Math.max(0, robotScreenY - robotSize * 2.5f);
+
         bubbleOverlay.setVisibility(View.VISIBLE);
         bubbleVisible = true;
         // Remove FLAG_NOT_FOCUSABLE so EditText can receive focus and keyboard
+        // Keep FLAG_WATCH_OUTSIDE_TOUCH so clicking outside dismisses
         bubbleParams.flags &= ~WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE;
+        bubbleParams.flags |= WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH;
         try {
             windowManager.updateViewLayout(bubbleOverlay, bubbleParams);
         } catch (Exception e) {}
@@ -341,7 +455,7 @@ public class FloatingRobotService extends Service implements SurfaceHolder.Callb
     // SurfaceHolder.Callback
     @Override
     public void surfaceCreated(SurfaceHolder holder) {
-        nativeInit(surfaceView);
+        nativeInit(surfaceView, (float) screenWidth, (float) screenHeight);
     }
 
     @Override
@@ -405,10 +519,11 @@ public class FloatingRobotService extends Service implements SurfaceHolder.Callb
     }
 
     // Native methods
-    private native void nativeInit(SurfaceView surfaceView);
+    private native void nativeInit(SurfaceView surfaceView, float screenWidth, float screenHeight);
     private native void nativeSendChat(String message);
     private native void nativeResume();
     private native void nativePause();
     private native void nativeDestroy();
     private native void nativeOnTouch(float x, float y, int action);
+    private native void nativeSetPosition(float x, float y);
 }

@@ -8,6 +8,7 @@
 #include <thread>
 #include <atomic>
 #include <chrono>
+#include <cstdio>
 
 #include "egl_renderer.h"
 #include "robot_gles.h"
@@ -27,6 +28,8 @@ static std::atomic<bool> g_paused(false);
 static std::thread g_renderThread;
 static JavaVM* g_jvm = nullptr;
 static jobject g_service = nullptr;
+static float g_screenWidth = 1080.0f;
+static float g_screenHeight = 1920.0f;
 
 // Helper: call Java method on UI thread
 static void callJavaMethod(const char* methodName, const char* sig, const std::string& arg) {
@@ -71,7 +74,7 @@ static void renderLoop() {
         return;
     }
 
-    g_robot.init(&g_renderer);
+    g_robot.init(&g_renderer, g_screenWidth, g_screenHeight);
 
     // Enable blending for transparent overlay
     glEnable(GL_BLEND);
@@ -103,6 +106,16 @@ static void renderLoop() {
             callJavaMethod("onBodyTap", "()V", "");
         }
 
+        // Send robot position to Java so the overlay window can follow
+        {
+            char posBuf[128];
+            float rx = g_robot.getScreenX();
+            float ry = g_robot.getScreenY();
+            float rs = g_robot.getRobotSize();
+            snprintf(posBuf, sizeof(posBuf), "%.1f,%.1f,%.1f", rx, ry, rs);
+            callJavaMethod("onRobotPosition", "(Ljava/lang/String;)V", posBuf);
+        }
+
         // Clear with transparent — this is an overlay on top of other apps
         glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
         glClear(GL_COLOR_BUFFER_BIT);
@@ -119,14 +132,16 @@ static void renderLoop() {
 extern "C" {
 
 JNIEXPORT void JNICALL
-Java_com_argos_companion_FloatingRobotService_nativeInit(JNIEnv* env, jobject service, jobject surfaceView) {
-    LOGI("nativeInit");
+Java_com_argos_companion_FloatingRobotService_nativeInit(JNIEnv* env, jobject service, jobject surfaceView, jfloat screenWidth, jfloat screenHeight) {
+    LOGI("nativeInit screen=%.0fx%.0f", screenWidth, screenHeight);
 
     env->GetJavaVM(&g_jvm);
     if (g_service) {
         env->DeleteGlobalRef(g_service);
     }
     g_service = env->NewGlobalRef(service);
+    g_screenWidth = screenWidth;
+    g_screenHeight = screenHeight;
 
     // Stop any existing render thread before starting a new one
     g_running.store(false);
@@ -219,6 +234,11 @@ Java_com_argos_companion_FloatingRobotService_nativeSendChat(JNIEnv* env, jobjec
             callJavaMethod("onChatResponse", "(Ljava/lang/String;)V", response);
         }
     }).detach();
+}
+
+JNIEXPORT void JNICALL
+Java_com_argos_companion_FloatingRobotService_nativeSetPosition(JNIEnv* env, jobject service, jfloat x, jfloat y) {
+    g_robot.setScreenPosition(x, y);
 }
 
 JNIEXPORT void JNICALL

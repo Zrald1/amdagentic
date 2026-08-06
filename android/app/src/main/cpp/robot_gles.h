@@ -16,7 +16,7 @@ public:
     RobotGles();
     ~RobotGles();
 
-    void init(EglRenderer* renderer);
+    void init(EglRenderer* renderer, float screenWidth, float screenHeight);
     void update(float dt);
     void render();
 
@@ -25,6 +25,13 @@ public:
     void onTouch(float x, float y, int action);
     bool consumeHeadTap();
     bool consumeBodyTap();
+    bool isDragging() const { return m_dragging; }
+    void setScreenPosition(float x, float y);
+    void setScreenDims(float w, float h);
+
+    float getScreenX() const { return m_cx; }
+    float getScreenY() const { return m_cy; }
+    float getRobotSize() const { return m_robotSize; }
 
 private:
     EglRenderer* m_renderer = nullptr;
@@ -58,6 +65,11 @@ private:
     bool m_touchDown = false;
     bool m_headTapped = false;
     bool m_bodyTapped = false;
+    bool m_dragging = false;
+
+    // Screen dimensions for walking
+    float m_screenWidth = 1080.0f;
+    float m_screenHeight = 1920.0f;
 
     void setState(AndroidRobotState state, float duration);
     void pickNextBehavior();

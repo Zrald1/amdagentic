@@ -9,18 +9,32 @@
 RobotGles::RobotGles() {}
 RobotGles::~RobotGles() {}
 
-void RobotGles::init(EglRenderer* renderer) {
+void RobotGles::init(EglRenderer* renderer, float screenWidth, float screenHeight) {
     m_renderer = renderer;
+    m_screenWidth = screenWidth;
+    m_screenHeight = screenHeight;
     if (renderer) {
-        m_cx = renderer->getWidth() / 2.0f;
-        m_cy = renderer->getHeight() / 2.0f;
-        m_robotSize = (float)(renderer->getHeight() < renderer->getWidth() ?
-                     renderer->getHeight() : renderer->getWidth()) * 0.18f;
+        // Robot size based on screen width
+        m_robotSize = screenWidth * 0.12f;
+        // Start at center of screen
+        m_cx = screenWidth / 2.0f;
+        m_cy = screenHeight * 0.35f;
         m_targetX = m_cx;
 
         // Start walking immediately — pick a random direction
         walkToEdge(rand() % 2 == 0);
     }
+}
+
+void RobotGles::setScreenPosition(float x, float y) {
+    m_cx = x;
+    m_cy = y;
+    m_targetX = x;
+}
+
+void RobotGles::setScreenDims(float w, float h) {
+    m_screenWidth = w;
+    m_screenHeight = h;
 }
 
 void RobotGles::setState(AndroidRobotState state, float duration) {
@@ -41,9 +55,8 @@ void RobotGles::pickNextBehavior() {
 }
 
 void RobotGles::walkToEdge(bool left) {
-    if (!m_renderer) return;
     float margin = m_robotSize * 1.5f;
-    m_targetX = left ? margin : (float)m_renderer->getWidth() - margin;
+    m_targetX = left ? margin : m_screenWidth - margin;
     m_facingRight = !left;
     setState(AndroidRobotState::Walking, 999.0f);
 }
@@ -52,7 +65,7 @@ void RobotGles::startSpinThenWalk(bool left) {
     m_spinWalkLeft = left;
     m_spinTimer = 0.0f;
     float margin = m_robotSize * 1.5f;
-    if (m_renderer) m_targetX = left ? margin : (float)m_renderer->getWidth() - margin;
+    m_targetX = left ? margin : m_screenWidth - margin;
     m_facingRight = !left;
     setState(AndroidRobotState::Spinning, m_spinDuration);
 }
@@ -88,7 +101,7 @@ void RobotGles::update(float dt) {
         }
     }
 
-    if (m_state == AndroidRobotState::Walking) {
+    if (m_state == AndroidRobotState::Walking && !m_dragging) {
         float dx = m_targetX - m_cx;
         if (fabs(dx) < 3.0f) {
             m_cx = m_targetX;
@@ -113,22 +126,45 @@ void RobotGles::update(float dt) {
 }
 
 void RobotGles::onTouch(float x, float y, int action) {
+    // x, y are window-local coords; robot is at window center
+    float winW = m_renderer ? m_renderer->getWidth() : 400;
+    float winH = m_renderer ? m_renderer->getHeight() : 500;
+    float rcx = winW / 2.0f;
+    float rcy = winH / 2.0f;
+
     if (action == 0) { // DOWN
         m_touchDown = true;
         m_touchStartX = x;
         m_touchStartY = y;
+        m_dragging = false;
+    } else if (action == 2) { // MOVE
+        if (m_touchDown) {
+            float dx = x - m_touchStartX;
+            float dy = y - m_touchStartY;
+            float dist = sqrtf(dx * dx + dy * dy);
+            if (dist > 20.0f) {
+                m_dragging = true;
+            }
+        }
     } else if (action == 1) { // UP
         m_touchDown = false;
+        if (m_dragging) {
+            m_dragging = false;
+            // After drag, resume walking from current position
+            setState(AndroidRobotState::Idle, 2.0f);
+            return;
+        }
+
         float dx = x - m_touchStartX;
         float dy = y - m_touchStartY;
         float dist = sqrtf(dx * dx + dy * dy);
 
         if (dist < 30.0f) { // Tap (not drag)
-            float headY = m_cy - m_robotSize * 0.55f;
+            float headY = rcy - m_robotSize * 0.55f;
             float headRadius = m_robotSize * 0.35f;
 
-            // Tap on head = speech bubble (Java handles the UI)
-            float dxHead = x - m_cx;
+            // Tap on head = speech bubble
+            float dxHead = x - rcx;
             float dyHead = y - headY;
             if (sqrtf(dxHead * dxHead + dyHead * dyHead) < headRadius) {
                 m_headTapped = true;
@@ -136,11 +172,11 @@ void RobotGles::onTouch(float x, float y, int action) {
             }
 
             // Tap on body = spin then walk
-            float dxBody = x - m_cx;
-            float dyBody = y - m_cy;
+            float dxBody = x - rcx;
+            float dyBody = y - rcy;
             if (sqrtf(dxBody * dxBody + dyBody * dyBody) < m_robotSize * 0.5f) {
                 m_bodyTapped = true;
-                startSpinThenWalk(x < m_cx);
+                startSpinThenWalk(x < rcx);
             }
         }
     }
@@ -161,8 +197,9 @@ bool RobotGles::consumeBodyTap() {
 void RobotGles::render() {
     if (!m_renderer) return;
 
-    float cx = m_cx;
-    float cy = m_cy + m_bob;
+    // Render at window center — the window follows the robot via Java
+    float cx = m_renderer->getWidth() / 2.0f;
+    float cy = m_renderer->getHeight() / 2.0f + m_bob;
     float s = m_robotSize;
 
     // Ground shadow

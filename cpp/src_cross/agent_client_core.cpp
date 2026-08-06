@@ -1,5 +1,6 @@
 #include "agent_client_core.h"
 #include "argos_tools_core.h"
+#include "platform.h"
 #include <sstream>
 #include <cstring>
 #include <thread>
@@ -157,7 +158,14 @@ std::string AgentClientCore::executeTools(const std::string& response) {
 std::string AgentClientCore::chatWithMessages(const std::vector<ChatMessageCore>& messages) {
     std::string body = buildJsonBody(messages, false);
     std::string headers = "Authorization: Bearer " + m_apiKey + "\r\n";
-    std::string response = argos::httpPost(m_serverUrl + "/chat/completions", headers, body);
+    std::string url = m_serverUrl + "/chat/completions";
+    argos::log(("POST " + url + " body_len=" + std::to_string(body.size())).c_str());
+    std::string response = argos::httpPost(url, headers, body);
+    argos::log(("HTTP response len=" + std::to_string(response.size())).c_str());
+    if (response.size() > 0) {
+        std::string preview = response.substr(0, response.size() > 500 ? 500 : response.size());
+        argos::log(("Response: " + preview).c_str());
+    }
 
     // Parse JSON response — find "content":"..."
     size_t contentPos = response.find("\"content\":\"");
@@ -191,11 +199,13 @@ std::string AgentClientCore::chatWithMessagesStreaming(const std::vector<ChatMes
                                                         StreamCallbackCore callback) {
     std::string body = buildJsonBody(messages, true);
     std::string headers = "Authorization: Bearer " + m_apiKey + "\r\n";
+    std::string url = m_serverUrl + "/chat/completions";
+    argos::log(("POST streaming " + url).c_str());
 
     std::string fullResponse;
     std::string leftover;
 
-    std::string rawResponse = argos::httpPostStream(m_serverUrl + "/chat/completions", headers, body,
+    std::string rawResponse = argos::httpPostStream(url, headers, body,
         [&](const std::string& chunk) -> bool {
             if (m_abort.load()) return false;
             std::string data = leftover + chunk;
@@ -215,9 +225,10 @@ std::string AgentClientCore::chatWithMessagesStreaming(const std::vector<ChatMes
         });
 
     if (fullResponse.empty()) {
-        // Try non-streaming fallback
+        argos::log("Streaming response empty, falling back to non-streaming");
         return chatWithMessages(messages);
     }
+    argos::log(("Streaming done, response len=" + std::to_string(fullResponse.size())).c_str());
     return fullResponse;
 }
 
